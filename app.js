@@ -3061,7 +3061,12 @@ function renderWordStatistics() {
     const container = document.getElementById('word-statistics-list');
     const summary = document.getElementById('word-statistics-summary');
     if (!container || !currentArticle) return;
-    const excludeCommon = !!document.getElementById('frequency-exclude-common')?.checked;
+    const profile = getLanguageProfile(currentArticle);
+    const commonLabel = document.getElementById('frequency-exclude-common-label');
+    const commonInput = document.getElementById('frequency-exclude-common');
+    if (commonLabel) commonLabel.style.display = profile.id === 'en' ? '' : 'none';
+    if (profile.id !== 'en' && commonInput) commonInput.checked = false;
+    const excludeCommon = profile.id === 'en' && !!commonInput?.checked;
     const frequency = getWordFrequency(currentArticle, excludeCommon).slice(0, 80);
     const total = countLanguageWords(getArticleFullText(currentArticle), currentArticle);
     const unit = getLanguageProfile(currentArticle).wordUnit;
@@ -4322,15 +4327,15 @@ function renderGlobalVocabulary() {
     const count = document.getElementById('global-vocab-count');
     if (count) {
         count.textContent = entries.length === total
-            ? total.toLocaleString() + ' words'
-            : entries.length.toLocaleString() + ' / ' + total.toLocaleString() + ' words';
+            ? total.toLocaleString() + ' 件'
+            : entries.length.toLocaleString() + ' / ' + total.toLocaleString() + ' 件';
     }
     const statsTarget = document.getElementById('global-vocab-statistics');
     if (statsTarget) {
         const filteredStats = getGlobalVocabularyStatistics(entries);
         const allStats = getGlobalVocabularyStatistics(globalVocabularyState.entries);
         const prefix = entries.length === total ? '' : `${filteredStats.total} / ${allStats.total} entries · `;
-        statsTarget.textContent = `${prefix}${filteredStats.unique} unique · ${filteredStats.memorized} memorized · ${filteredStats.total - filteredStats.memorized} unmemorized`;
+        statsTarget.textContent = `${prefix}${filteredStats.unique}語 · ${filteredStats.memorized}習得済み · ${filteredStats.total - filteredStats.memorized}未習得`;
     }
 
     applyAnkiMaskClass(container, globalVocabularyState.ankiMode, globalVocabularyState.ankiTarget);
