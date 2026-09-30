@@ -2097,18 +2097,30 @@ function renderList(type, filter = '') {
 
     if (type === 'settings') { renderSettingsUI(container); return; }
     renderArticleVocabularyStatistics(type);
+    syncAnkiTargetOptions(currentArticle);
 
     applyAnkiMaskClass(container, type === 'words' && isAnkiMode, document.getElementById('anki-target-select')?.value);
 
     const sourceList = type === 'words' ? currentArticle.words : currentArticle.notes;
     let list = sourceList.map((item, sourceIndex) => ({ item, sourceIndex }));
-    if (type === 'words' && document.getElementById('hide-memorized-check')?.checked) list = list.filter(entry => !entry.item.memorized);
+    if (type === 'words') {
+        list.forEach(entry => normalizeWordLearningState(entry.item, currentArticle));
+        if (document.getElementById('hide-memorized-check')?.checked) {
+            list = list.filter(entry => !entry.item.memorized);
+        }
+    }
 
+    const annotationDefinition = getPrimaryAnnotationDefinition(currentArticle);
     if (filter) {
-        const q = filter.toLowerCase();
+        const q = filter.toLocaleLowerCase();
         list = list.filter(({ item }) => type === 'words'
-            ? (item.word + item.meaning + (item.memo || '')).toLowerCase().includes(q)
-            : (item.originalText + item.translation + (item.extra || '')).toLowerCase().includes(q));
+            ? [
+                item.word,
+                annotationDefinition ? getWordAnnotationValue(item, annotationDefinition.id) : '',
+                item.meaning,
+                item.memo || ''
+            ].join(' ').toLocaleLowerCase().includes(q)
+            : [item.originalText, item.translation, item.extra || ''].join(' ').toLocaleLowerCase().includes(q));
     }
 
     list.forEach(({ item, sourceIndex }) => {
@@ -2121,18 +2133,32 @@ function renderList(type, filter = '') {
             return safe.replace(new RegExp(`(${escapedFilter})`, 'gi'), '<span class="text-highlight">$1</span>');
         };
         if (type === 'words') {
+            normalizeWordLearningState(item, currentArticle);
+            const readingValue = annotationDefinition ? getWordAnnotationValue(item, annotationDefinition.id) : '';
+            const targets = getWordStudyTargets(item, currentArticle);
+            const targetControls = annotationDefinition && readingValue
+                ? `<div class="word-study-row">${targets.map(target => {
+                    const targetIdArgument = escapeHtml(JSON.stringify(target.id));
+                    return `<label class="word-study-target"><input type="checkbox" onchange="toggleWordStudyTarget(${itemIdArgument}, ${targetIdArgument}, event, ${sourceIndex})" onclick="event.stopPropagation()" ${target.learned ? 'checked' : ''}> ${escapeHtml(target.label)}</label>`;
+                }).join('')}</div>`
+                : `<div class="word-study-row"><label class="word-study-target"><input type="checkbox" onchange="toggleMemorized(${itemIdArgument}, event, ${sourceIndex})" onclick="event.stopPropagation()" ${item.memorized ? 'checked' : ''}> 暗記済み</label></div>`;
+
             card.id = `word-card-${item.id}`;
             card.className = `note-card compact-card ${item.memorized ? 'memorized-item' : ''}`;
             card.onclick = () => isAnkiMode && card.classList.toggle('revealed');
+            const safeWordForSpeech = String(item.word || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
             card.innerHTML = `
                 <div class="word-row">
                     <div class="word-left">
-                        <input type="checkbox" onchange="toggleMemorized(${itemIdArgument}, event, ${sourceIndex})" onclick="event.stopPropagation()" ${item.memorized ? 'checked' : ''}>
-                        <span onclick="event.stopPropagation(); speakWord('${item.word.replace(/'/g, "\\'")}')">🔊</span>
-                        <span class="word-text">${highlight(item.word)}</span>
+                        <span class="word-speaker" onclick="event.stopPropagation(); speakWord('${safeWordForSpeech}', '${getArticleLanguage(currentArticle)}')">🔊</span>
+                        <span class="word-main-stack">
+                            <span class="word-text">${highlight(item.word)}</span>
+                            ${readingValue ? `<span class="reading-text">${highlight(readingValue)}</span>` : ''}
+                        </span>
                     </div>
                     <div class="meaning-right">${highlight(item.meaning)}</div>
                 </div>
+                ${targetControls}
                 ${item.memo ? `<div class="memo-row">${highlight(item.memo)}</div>` : ''}
                 <div class="action-group"><button onclick="event.stopPropagation(); editItem(${itemIdArgument}, 'word', ${sourceIndex})">編</button><button onclick="event.stopPropagation(); deleteListItem(${itemIdArgument}, 'words', ${sourceIndex})">消</button></div>`;
         } else {
@@ -2147,8 +2173,6 @@ function renderList(type, filter = '') {
         container.appendChild(card);
     });
 }
-
-// --- 単語・ノート保存ロジック (モーダル内) ---
 async function handleUnifiedSave(e) {
     e.preventDefault();
     if (globalVocabularyEditRef) {
@@ -2160,6 +2184,8 @@ async function handleUnifiedSave(e) {
     try {
         if (currentModalType === 'word') {
             const activeChapterId = getActiveChapterIdForItem();
+            const definition = getPrimaryAnnotationDefinition(currentArticle);
+            const annotationValue = document.getElementById('input-word-annotation')?.value || '';
             const values = {
                 word: document.getElementById('input-word-text').value,
                 meaning: document.getElementById('input-word-meaning').value,
@@ -2170,9 +2196,11 @@ async function handleUnifiedSave(e) {
             if (editIndex >= 0) {
                 const old = currentArticle.words[editIndex];
                 if (old) {
-                    currentArticle.words = currentArticle.words.map((i, index) => {
-                        if (index !== editIndex) return i;
-                        const updated = Object.assign({}, i, values);
+                    currentArticle.words = currentArticle.words.map((item, index) => {
+                        if (index !== editIndex) return item;
+                        const updated = Object.assign({}, item, values);
+                        if (definition) setWordAnnotationValue(updated, definition, annotationValue);
+                        normalizeWordLearningState(updated, currentArticle);
                         if ((updated.chapterId === undefined || updated.chapterId === null) && activeChapterId) {
                             updated.chapterId = activeChapterId;
                         }
@@ -2180,7 +2208,14 @@ async function handleUnifiedSave(e) {
                     });
                 }
             } else {
-                const word = Object.assign({ id: Date.now(), memorized: false, createdAt: Date.now() }, values);
+                const word = Object.assign({
+                    id: Date.now(),
+                    memorized: false,
+                    study: { meaning: false, annotations: {} },
+                    createdAt: Date.now()
+                }, values);
+                if (definition) setWordAnnotationValue(word, definition, annotationValue);
+                normalizeWordLearningState(word, currentArticle);
                 if (activeChapterId) word.chapterId = activeChapterId;
                 if (selectedReaderCapture?.anchor && selectedText === selectedReaderCapture.anchor.selectedText) {
                     word.anchor = selectedReaderCapture.anchor;
@@ -2198,12 +2233,12 @@ async function handleUnifiedSave(e) {
                     if ((updated.chapterId === undefined || updated.chapterId === null) && activeChapterId) {
                         updated.chapterId = activeChapterId;
                     }
-                    currentArticle.notes = currentArticle.notes.map((i, index) => index === editIndex ? updated : i);
+                    currentArticle.notes = currentArticle.notes.map((item, index) => index === editIndex ? updated : item);
                 }
             } else {
-                const n = { id: Date.now(), ...values };
-                if (activeChapterId) n.chapterId = activeChapterId;
-                currentArticle.notes.push(n);
+                const note = { id: Date.now(), ...values };
+                if (activeChapterId) note.chapterId = activeChapterId;
+                currentArticle.notes.push(note);
             }
         }
         await saveToDB();
@@ -2212,7 +2247,6 @@ async function handleUnifiedSave(e) {
         renderList(currentTab, document.getElementById('list-search').value);
     } catch (err) { console.error(err); }
 }
-
 function switchModalType(type) {
     currentModalType = type;
     const isW = (type === 'word');
@@ -2243,7 +2277,11 @@ function editItem(id, type, sourceIndex = null) {
     editingSourceIndex = itemIndex;
     switchModalType(type);
     if (type === 'word') {
+        syncWordAnnotationField(currentArticle);
+        const definition = getPrimaryAnnotationDefinition(currentArticle);
         document.getElementById('input-word-text').value = item.word;
+        document.getElementById('input-word-annotation').value = definition ? getWordAnnotationValue(item, definition.id) : '';
+        lastAutoAnnotationValue = '';
         document.getElementById('input-word-meaning').value = item.meaning;
         document.getElementById('input-word-memo').value = item.memo || '';
         document.getElementById('input-word-context').value = item.context || '';
@@ -2254,18 +2292,15 @@ function editItem(id, type, sourceIndex = null) {
     }
     showUnifiedModal();
 }
-
-// --- ＋ボタンを押した時にモーダルを新規状態で開く ---
 function openUnifiedModal() {
     if (!currentArticle) {
         alert("記事を開いてから追加してください");
         return;
     }
     globalVocabularyEditRef = null;
-    editingId = null; // 編集ではなく新規作成モードにする
+    editingId = null;
     editingSourceIndex = null;
-    
-    // 入力欄をリセット（選択テキストがあれば自動入力）
+
     document.getElementById('input-word-text').value = selectedText || "";
     document.getElementById('input-word-meaning').value = "";
     document.getElementById('input-word-memo').value = "";
@@ -2274,15 +2309,13 @@ function openUnifiedModal() {
     document.getElementById('input-note-trans').value = "";
     document.getElementById('input-note-extra').value = "";
 
-    // デフォルトで「単語」タブを選択状態にする
     switchModalType('word');
-
-    // モーダルを表示
+    syncWordAnnotationField(currentArticle);
+    document.getElementById('input-word-annotation').value = '';
+    lastAutoAnnotationValue = '';
+    if (selectedText) autoFillPrimaryAnnotation();
     showUnifiedModal();
 }
-
-
-// --- 共通ユーティリティ ---
 function ensureArticleCollections(article) {
     if (!article) return;
     if (!LANGUAGE_PROFILES[article.language]) article.language = 'en';
@@ -2370,10 +2403,9 @@ function captureReaderSelection(range, selected) {
 
 function applyAnkiMaskClass(container, active, target) {
     if (!container) return;
-    container.classList.remove('anki-mask-both', 'anki-mask-word', 'anki-mask-meaning');
+    container.classList.remove('anki-mask-both', 'anki-mask-word', 'anki-mask-meaning', 'anki-mask-reading', 'anki-mask-learning');
     if (active) container.classList.add('anki-mask-' + (target || 'both'));
 }
-
 function getReaderElementTop(element, container) {
     const containerRect = container.getBoundingClientRect();
     const elementRect = element.getBoundingClientRect();
@@ -2695,15 +2727,35 @@ function handleListSearch() { renderList(currentTab, document.getElementById('li
 async function toggleMemorized(id, e, sourceIndex = null) {
     if (e) e.stopPropagation();
     const wordIndex = resolveArticleCollectionIndex(currentArticle.words, id, sourceIndex);
-    const w = wordIndex >= 0 ? currentArticle.words[wordIndex] : null;
-    if (!w) return;
+    const word = wordIndex >= 0 ? currentArticle.words[wordIndex] : null;
+    if (!word) return;
     const readingPosition = rememberReadingPosition();
-    w.memorized = !w.memorized;
+    normalizeWordLearningState(word, currentArticle);
+    setAllWordStudyTargets(word, !word.memorized, currentArticle);
     await saveToDB();
     renderList('words', document.getElementById('list-search').value);
     restoreReadingPosition(readingPosition);
 }
-function speakWord(t) { if ('speechSynthesis' in window) { speechSynthesis.cancel(); const u = new SpeechSynthesisUtterance(t); u.lang = 'en-US'; speechSynthesis.speak(u); } }
+
+async function toggleWordStudyTarget(id, targetId, e, sourceIndex = null) {
+    if (e) e.stopPropagation();
+    const wordIndex = resolveArticleCollectionIndex(currentArticle.words, id, sourceIndex);
+    const word = wordIndex >= 0 ? currentArticle.words[wordIndex] : null;
+    if (!word) return;
+    const readingPosition = rememberReadingPosition();
+    setWordStudyTarget(word, targetId, !!e?.target?.checked, currentArticle);
+    await saveToDB();
+    renderList('words', document.getElementById('list-search').value);
+    restoreReadingPosition(readingPosition);
+}
+function speakWord(text, language = null) {
+    if (!('speechSynthesis' in window)) return;
+    const profile = LANGUAGE_PROFILES[language] || getLanguageProfile(currentArticle);
+    speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(String(text || ''));
+    utterance.lang = profile.locale;
+    speechSynthesis.speak(utterance);
+}
 function applySettings() { document.documentElement.style.setProperty('--reader-font-size', readerSettings.fontSize+'px'); document.documentElement.style.setProperty('--reader-line-height', readerSettings.lineHeight); }
 function renderSettingsUI(c) { c.innerHTML = `<div class="settings-group"><p>文字: ${readerSettings.fontSize}px</p><input type="range" min="14" max="30" value="${readerSettings.fontSize}" oninput="updateSetting('font', this.value)"><p>行間: ${readerSettings.lineHeight}</p><input type="range" min="1.2" max="2.5" step="0.1" value="${readerSettings.lineHeight}" oninput="updateSetting('line', this.value)"></div>`; }
 function updateSetting(t, v) { if (t==='font') readerSettings.fontSize=v; else readerSettings.lineHeight=v; applySettings(); db.setItem('reader_settings', readerSettings); renderList('settings'); }
