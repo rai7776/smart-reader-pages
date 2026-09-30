@@ -203,7 +203,7 @@ function getLanguageTokens(text, article = currentArticle) {
         }
     }
     if (profile.id === 'zh') return value.match(/[\p{Script=Han}]/gu) || [];
-    return value.match(/[A-Za-z]+(?:['’][A-Za-z]+)*(?:-[A-Za-z]+(?:['’][A-Za-z]+)*)*/g) || [];
+    return value.match(/[\p{L}\p{M}\p{N}]+(?:['’\-][\p{L}\p{M}\p{N}]+)*/gu) || [];
 }
 
 function countLanguageWords(text, article = currentArticle) {
@@ -2823,14 +2823,6 @@ function toggleMobilePanelSize() {
     panel.classList.toggle('is-expanded');
     updateMobilePanelSizeButton();
 }
-function countEnglishWords(text) {
-    return getEnglishTokens(text).length;
-}
-
-function getEnglishTokens(text) {
-    return String(text ?? '').match(/[A-Za-z]+(?:['’][A-Za-z]+)*(?:-[A-Za-z]+(?:['’][A-Za-z]+)*)*/g) || [];
-}
-
 function getArticleFullText(article) {
     if (!article) return '';
     if (hasStoredChapters(article)) return getArticleChapters(article).map(chapter => chapter.content).join('\n\n');
