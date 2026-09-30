@@ -3000,10 +3000,40 @@ async function deleteListItem(id, type, sourceIndex = null) {
 function switchTab(t) { currentTab=t; document.getElementById('anki-wrapper').style.display=(t==='settings'?'none':'block'); document.querySelectorAll('.tab-btn').forEach((b,i)=>b.classList.toggle('active',(i===0&&t==='words') || (i===1&&t==='notes') || (i===2&&t==='settings'))); renderList(t); }
 function openMoveModal(id) { movingItemId = id; const item = libraryItems.find(i => i.id === id); if(!item) return; document.getElementById('move-target-name').innerText = item.name; const s = document.getElementById('move-select'); s.innerHTML = '<option value="">🏠 Root</option>'; libraryItems.filter(i=>i.type==='folder'&&i.id!==id).forEach(f=>{ const o=document.createElement('option'); o.value=f.id; o.innerText=f.name; s.appendChild(o); }); document.getElementById('move-modal-overlay').classList.add('show'); }
 async function submitMove() { if(!movingItemId) return; const val = document.getElementById('move-select').value; const pid = val?parseInt(val):null; const item = libraryItems.find(i=>i.id===movingItemId); if(item){ item.parentId=pid; await saveToDB(); document.getElementById('move-modal-overlay').classList.remove('show'); showLibrary(); } }
-function exportToCSV() { if (!currentArticle || currentArticle.words.length === 0) { alert("データなし"); return; } let csv = "Word,Meaning,Memo\n"; currentArticle.words.forEach(i => { const e=t=>t?`"${t.replace(/"/g, '""')}"`:""; csv+=`${e(i.word)},${e(i.meaning)},${e(i.memo)}\n`; }); const b = new Blob([new Uint8Array([0xEF, 0xBB, 0xBF]), csv], { type: 'text/csv' }); const l = document.createElement("a"); l.href=URL.createObjectURL(b); l.download="words.csv"; l.click(); }
-
-const COMMON_FREQUENCY_WORDS = new Set(['the', 'a', 'an', 'and', 'or', 'but', 'of', 'to', 'in', 'on', 'for', 'with', 'at', 'by', 'from', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'it', 'that', 'this', 'as', 'i', 'you', 'he', 'she', 'we', 'they', 'his', 'her', 'their', 'my', 'your', 'not', 'do', 'does', 'did', 'have', 'has', 'had']);
-
+function exportToCSV() {
+    if (!currentArticle || currentArticle.words.length === 0) {
+        alert("データなし");
+        return;
+    }
+    const definition = getPrimaryAnnotationDefinition(currentArticle);
+    const header = ['Word', 'Language', 'ReadingSystem', 'Reading', 'Meaning', 'ReadingLearned', 'MeaningLearned', 'Memo', 'Context'];
+    const e = value => {
+        const text = String(value ?? '');
+        return '"' + text.replace(/"/g, '""') + '"';
+    };
+    const rows = currentArticle.words.map(word => {
+        normalizeWordLearningState(word, currentArticle);
+        const reading = definition ? getWordAnnotationValue(word, definition.id) : '';
+        return [
+            word.word,
+            getArticleLanguage(currentArticle),
+            definition?.system || '',
+            reading,
+            word.meaning,
+            definition && reading ? !!word.study?.annotations?.[definition.id] : '',
+            !!word.study?.meaning,
+            word.memo || '',
+            word.context || ''
+        ];
+    });
+    const csv = [header, ...rows].map(row => row.map(e).join(',')).join('\r\n') + '\r\n';
+    const blob = new Blob([new Uint8Array([0xEF, 0xBB, 0xBF]), csv], { type: 'text/csv;charset=utf-8' });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = "words.csv";
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 0);
+}
 function getWordFrequency(article, excludeCommon = false) {
     const counts = new Map();
     const profile = getLanguageProfile(article);
@@ -3680,17 +3710,33 @@ function collectGlobalVocabulary() {
     libraryItems
         .filter(item => item && item.type === 'article')
         .forEach(article => {
+            ensureArticleCollections(article);
+            const language = getArticleLanguage(article);
+            const definition = getPrimaryAnnotationDefinition(article);
             const words = Array.isArray(article.words) ? article.words : [];
             words.forEach((word, sourceIndex) => {
+                normalizeWordLearningState(word, article);
                 const chapter = getGlobalChapterInfo(article, word);
                 const wordId = word?.id;
                 const key = hasGlobalWordId(wordId)
                     ? `${String(article.id)}::id::${String(wordId)}`
                     : `${String(article.id)}::index::${String(sourceIndex)}`;
+                const annotationValue = definition ? getWordAnnotationValue(word, definition.id) : '';
+                const groupKey = [
+                    language,
+                    normalizeVocabularyWord(word?.word),
+                    normalizeVocabularyWord(annotationValue)
+                ].join('::');
                 entries.push({
                     key,
+                    groupKey,
                     articleId: article.id,
                     articleTitle: getGlobalArticleTitle(article),
+                    language,
+                    annotationId: definition?.id || '',
+                    annotationLabel: definition?.label || '',
+                    annotationSystem: definition?.system || '',
+                    annotationValue,
                     chapterId: chapter.id,
                     chapterTitle: chapter.title,
                     wordId,
@@ -3702,6 +3748,7 @@ function collectGlobalVocabulary() {
                     context: word?.context,
                     contextMeaning: word?.contextMeaning,
                     memorized: !!word?.memorized,
+                    studyTargets: getWordStudyTargets(word, article),
                     createdAt: word?.createdAt,
                     sequence: sequence++
                 });
@@ -3710,7 +3757,6 @@ function collectGlobalVocabulary() {
 
     return entries;
 }
-
 function findGlobalEntry(key) {
     return globalVocabularyState.entries.find(entry => entry.key === String(key)) || null;
 }
@@ -3762,6 +3808,8 @@ function getFilteredGlobalVocabulary() {
         if (!query) return true;
         return [
             entry.wordText,
+            entry.annotationValue,
+            entry.annotationLabel,
             entry.meaning,
             entry.memo,
             entry.articleTitle,
@@ -3772,8 +3820,11 @@ function getFilteredGlobalVocabulary() {
     entries.sort((left, right) => {
         if (state.sort === 'az' || state.sort === 'za') {
             const direction = state.sort === 'az' ? 1 : -1;
-            const wordCompare = left.wordText.localeCompare(right.wordText, undefined, { sensitivity: 'base' });
+            const locale = getLanguageProfile({ language: left.language }).locale;
+            const wordCompare = left.wordText.localeCompare(right.wordText, locale, { sensitivity: 'base' });
             if (wordCompare !== 0) return wordCompare * direction;
+            const readingCompare = String(left.annotationValue || '').localeCompare(String(right.annotationValue || ''), locale, { sensitivity: 'base' });
+            if (readingCompare !== 0) return readingCompare * direction;
             return left.sequence - right.sequence;
         }
 
@@ -3782,7 +3833,6 @@ function getFilteredGlobalVocabulary() {
         if (leftTime !== rightTime) {
             return state.sort === 'oldest' ? leftTime - rightTime : rightTime - leftTime;
         }
-        // createdAtを持たないlegacy word同士も安定して並べる。
         return state.sort === 'oldest'
             ? left.sequence - right.sequence
             : right.sequence - left.sequence;
@@ -3790,26 +3840,32 @@ function getFilteredGlobalVocabulary() {
 
     return entries;
 }
-
 function getGlobalVocabularyStatistics(entries = globalVocabularyState.entries) {
     const list = Array.isArray(entries) ? entries : [];
     return {
         total: list.length,
-        unique: new Set(list.map(entry => normalizeVocabularyWord(entry.wordText)).filter(Boolean)).size,
+        unique: new Set(list.map(entry => entry.groupKey || normalizeVocabularyWord(entry.wordText)).filter(Boolean)).size,
         memorized: list.filter(entry => entry.memorized).length
     };
 }
-
 function groupGlobalVocabularyEntries(entries) {
     const groups = new Map();
     (entries || []).forEach(entry => {
-        const key = normalizeVocabularyWord(entry.wordText) || `__empty__${entry.key}`;
-        if (!groups.has(key)) groups.set(key, { key, wordText: entry.wordText, entries: [] });
+        const key = entry.groupKey || (normalizeVocabularyWord(entry.wordText) || `__empty__${entry.key}`);
+        if (!groups.has(key)) {
+            groups.set(key, {
+                key,
+                wordText: entry.wordText,
+                annotationLabel: entry.annotationLabel,
+                annotationValue: entry.annotationValue,
+                language: entry.language,
+                entries: []
+            });
+        }
         groups.get(key).entries.push(entry);
     });
     return Array.from(groups.values());
 }
-
 function renderGlobalVocabularyControls() {
     const state = globalVocabularyState;
     const sourceSelect = document.getElementById('global-vocab-source');
@@ -4069,33 +4125,68 @@ function createGlobalVocabularyCard(entry, { forceExpanded = false } = {}) {
     summary.className = 'word-row global-vocabulary-summary';
     const left = document.createElement('div');
     left.className = 'word-left';
-    const check = document.createElement('input');
-    check.type = 'checkbox';
-    check.checked = entry.memorized;
-    check.title = '暗記済み';
-    check.addEventListener('click', event => event.stopPropagation());
-    check.addEventListener('change', event => toggleGlobalMemorized(entry.key, event));
+
+    if (!entry.annotationValue) {
+        const check = document.createElement('input');
+        check.type = 'checkbox';
+        check.checked = entry.memorized;
+        check.title = '暗記済み';
+        check.addEventListener('click', event => event.stopPropagation());
+        check.addEventListener('change', event => toggleGlobalMemorized(entry.key, event));
+        left.appendChild(check);
+    }
+
     const speaker = document.createElement('span');
+    speaker.className = 'word-speaker';
     speaker.textContent = '🔊';
     speaker.title = '発音';
     speaker.addEventListener('click', event => {
         event.stopPropagation();
-        speakWord(entry.wordText);
+        speakWord(entry.wordText, entry.language);
     });
+
+    const wordStack = document.createElement('span');
+    wordStack.className = 'word-main-stack';
     const word = document.createElement('span');
     word.className = 'word-text';
     word.textContent = entry.wordText;
-    left.append(check, speaker, word);
+    wordStack.appendChild(word);
+    if (entry.annotationValue) {
+        const reading = document.createElement('span');
+        reading.className = 'reading-text';
+        reading.textContent = entry.annotationValue;
+        wordStack.appendChild(reading);
+    }
+    left.append(speaker, wordStack);
+
     const meaning = document.createElement('div');
     meaning.className = 'meaning-right';
     meaning.textContent = entry.meaning;
     summary.append(left, meaning);
     card.appendChild(summary);
 
+    if (entry.annotationValue && Array.isArray(entry.studyTargets)) {
+        const studyRow = document.createElement('div');
+        studyRow.className = 'word-study-row';
+        entry.studyTargets.forEach(target => {
+            const label = document.createElement('label');
+            label.className = 'word-study-target';
+            const input = document.createElement('input');
+            input.type = 'checkbox';
+            input.checked = !!target.learned;
+            input.addEventListener('click', event => event.stopPropagation());
+            input.addEventListener('change', event => toggleGlobalStudyTarget(entry.key, target.id, event));
+            label.append(input, document.createTextNode(' ' + target.label));
+            studyRow.appendChild(label);
+        });
+        card.appendChild(studyRow);
+    }
+
     const isExpanded = !globalVocabularyState.ankiMode && (forceExpanded || globalVocabularyState.expandedKey === entry.key);
     if (isExpanded) {
         const details = document.createElement('div');
         details.className = 'global-vocabulary-details';
+        if (entry.annotationValue) addGlobalVocabularyDetail(details, entry.annotationLabel || '読み', entry.annotationValue);
         addGlobalVocabularyDetail(details, '出典', entry.articleTitle);
         if (entry.chapterTitle) addGlobalVocabularyDetail(details, '章', entry.chapterTitle);
         if (entry.memo) addGlobalVocabularyDetail(details, 'Memo', entry.memo);
@@ -4135,23 +4226,33 @@ function createGlobalVocabularyCard(entry, { forceExpanded = false } = {}) {
 
     return card;
 }
-
 function createGlobalVocabularyGroupCard(group) {
     const card = document.createElement('article');
     const memorized = group.entries.filter(entry => entry.memorized).length;
     const expanded = globalVocabularyState.expandedKey === `group:${group.key}`;
     card.className = 'note-card compact-card global-vocabulary-card global-vocabulary-group';
+
     const summary = document.createElement('div');
     summary.className = 'word-row global-vocabulary-summary';
+    const stack = document.createElement('span');
+    stack.className = 'word-main-stack';
     const word = document.createElement('span');
     word.className = 'word-text';
     word.textContent = group.wordText;
+    stack.appendChild(word);
+    if (group.annotationValue) {
+        const reading = document.createElement('span');
+        reading.className = 'reading-text';
+        reading.textContent = group.annotationValue;
+        stack.appendChild(reading);
+    }
+
     const label = document.createElement('div');
     label.className = 'meaning-right global-vocabulary-group-count';
     const meanings = Array.from(new Set(group.entries.map(entry => entry.meaning).filter(Boolean)));
     const meaningLabel = meanings.length <= 1 ? (meanings[0] || '') : `${meanings.length} meanings`;
-    label.textContent = `${meaningLabel} · × ${group.entries.length} · ${memorized}/${group.entries.length} 暗記済み`;
-    summary.append(word, label);
+    label.textContent = `${meaningLabel} · × ${group.entries.length} · ${memorized}/${group.entries.length} 習得済み`;
+    summary.append(stack, label);
     summary.addEventListener('click', () => {
         globalVocabularyState.expandedKey = expanded ? null : `group:${group.key}`;
         renderGlobalVocabulary();
@@ -4163,21 +4264,21 @@ function createGlobalVocabularyGroupCard(group) {
     actions.className = 'global-vocabulary-actions global-vocabulary-group-actions';
     const markAll = document.createElement('button');
     markAll.className = 'small-btn';
-    markAll.textContent = 'すべて暗記済みにする';
+    markAll.textContent = 'すべて習得済みにする';
     markAll.onclick = () => void setGlobalGroupMemorized(group.key, true);
     const clearAll = document.createElement('button');
     clearAll.className = 'small-btn';
-    clearAll.textContent = 'すべて未暗記にする';
+    clearAll.textContent = 'すべて未習得にする';
     clearAll.onclick = () => void setGlobalGroupMemorized(group.key, false);
     actions.append(markAll, clearAll);
     card.appendChild(actions);
+
     const entries = document.createElement('div');
     entries.className = 'global-vocabulary-group-entries';
     group.entries.forEach(entry => entries.appendChild(createGlobalVocabularyCard(entry, { forceExpanded: true })));
     card.appendChild(entries);
     return card;
 }
-
 function renderGlobalVocabulary() {
     const container = document.getElementById('global-vocabulary-list');
     if (!container) return;
@@ -4263,23 +4364,33 @@ async function toggleGlobalMemorized(key, event) {
     const entry = findGlobalEntry(key);
     const source = getGlobalEntrySource(entry);
     if (!source) return;
-    source.word.memorized = !source.word.memorized;
+    normalizeWordLearningState(source.word, source.article);
+    setAllWordStudyTargets(source.word, !source.word.memorized, source.article);
     await saveToDB();
     globalVocabularyState.entries = collectGlobalVocabulary();
     renderGlobalVocabulary();
 }
 
+async function toggleGlobalStudyTarget(key, targetId, event) {
+    if (event) event.stopPropagation();
+    const entry = findGlobalEntry(key);
+    const source = getGlobalEntrySource(entry);
+    if (!source) return;
+    setWordStudyTarget(source.word, targetId, !!event?.target?.checked, source.article);
+    await saveToDB();
+    globalVocabularyState.entries = collectGlobalVocabulary();
+    renderGlobalVocabulary();
+}
 async function setGlobalGroupMemorized(groupKey, memorized) {
-    const entries = globalVocabularyState.entries.filter(entry => normalizeVocabularyWord(entry.wordText) === groupKey);
+    const entries = globalVocabularyState.entries.filter(entry => entry.groupKey === groupKey);
     entries.forEach(entry => {
         const source = getGlobalEntrySource(entry);
-        if (source) source.word.memorized = memorized;
+        if (source) setAllWordStudyTargets(source.word, memorized, source.article);
     });
     await saveToDB();
     globalVocabularyState.entries = collectGlobalVocabulary();
     renderGlobalVocabulary();
 }
-
 function openGlobalVocabularyWordEditor(key) {
     const entry = findGlobalEntry(key);
     const source = getGlobalEntrySource(entry);
@@ -4291,13 +4402,16 @@ function openGlobalVocabularyWordEditor(key) {
     };
     editingId = source.word.id;
     switchModalType('word');
+    syncWordAnnotationField(source.article);
+    const definition = getPrimaryAnnotationDefinition(source.article);
     document.getElementById('input-word-text').value = source.word.word || '';
+    document.getElementById('input-word-annotation').value = definition ? getWordAnnotationValue(source.word, definition.id) : '';
+    lastAutoAnnotationValue = '';
     document.getElementById('input-word-meaning').value = source.word.meaning || '';
     document.getElementById('input-word-memo').value = source.word.memo || '';
     document.getElementById('input-word-context').value = source.word.context || '';
     showUnifiedModal();
 }
-
 async function saveGlobalVocabularyWordFromModal() {
     const reference = globalVocabularyEditRef;
     if (!reference) return;
@@ -4314,18 +4428,24 @@ async function saveGlobalVocabularyWordFromModal() {
         return;
     }
 
-    article.words[wordIndex] = Object.assign({}, oldWord, {
+    const definition = getPrimaryAnnotationDefinition(article);
+    const updated = Object.assign({}, oldWord, {
         word: document.getElementById('input-word-text').value,
         meaning: document.getElementById('input-word-meaning').value,
         memo: document.getElementById('input-word-memo').value,
         context: document.getElementById('input-word-context').value.trim()
     });
+    if (definition) {
+        setWordAnnotationValue(updated, definition, document.getElementById('input-word-annotation')?.value || '');
+    }
+    normalizeWordLearningState(updated, article);
+    article.words[wordIndex] = updated;
+
     await saveToDB();
     closeModal();
     globalVocabularyState.entries = collectGlobalVocabulary();
     renderGlobalVocabulary();
 }
-
 async function deleteGlobalVocabularyWord(key) {
     const entry = findGlobalEntry(key);
     const source = getGlobalEntrySource(entry);
@@ -4465,17 +4585,26 @@ function exportGlobalVocabularyCSV() {
         alert('データなし');
         return;
     }
-    const header = ['Word', 'Meaning', 'Memo', 'Context', 'Article', 'Chapter', 'Memorized', 'CreatedAt'];
-    const rows = entries.map(entry => [
-        entry.wordText,
-        entry.meaning,
-        entry.memo,
-        entry.context || '',
-        entry.articleTitle,
-        entry.chapterTitle,
-        entry.memorized ? 'true' : 'false',
-        entry.createdAt || ''
-    ]);
+    const header = ['Word', 'Language', 'ReadingSystem', 'Reading', 'Meaning', 'ReadingLearned', 'MeaningLearned', 'Memo', 'Context', 'Article', 'Chapter', 'Memorized', 'CreatedAt'];
+    const rows = entries.map(entry => {
+        const readingTarget = entry.studyTargets?.find(target => String(target.id).startsWith('annotation:'));
+        const meaningTarget = entry.studyTargets?.find(target => target.id === 'meaning');
+        return [
+            entry.wordText,
+            entry.language,
+            entry.annotationSystem,
+            entry.annotationValue,
+            entry.meaning,
+            readingTarget ? (readingTarget.learned ? 'true' : 'false') : '',
+            meaningTarget ? (meaningTarget.learned ? 'true' : 'false') : '',
+            entry.memo,
+            entry.context || '',
+            entry.articleTitle,
+            entry.chapterTitle,
+            entry.memorized ? 'true' : 'false',
+            entry.createdAt || ''
+        ];
+    });
     const csv = [header, ...rows].map(row => row.map(globalCsvValue).join(',')).join('\r\n') + '\r\n';
     downloadGlobalVocabularyCsv(csv, 'global-vocabulary.csv');
 }
