@@ -703,6 +703,11 @@ function createImportReviewState(documentData) {
         mode: 'import',
         articleId: null,
         title: String(documentData?.title || '').trim() || '無題',
+        language: LANGUAGE_PROFILES[documentData?.language]
+            ? documentData.language
+            : (LANGUAGE_PROFILES[document.getElementById('article-language')?.value]
+                ? document.getElementById('article-language').value
+                : 'en'),
         sourceType: documentData?.sourceType || 'text',
         sourceName,
         warnings: Array.isArray(documentData?.warnings) ? documentData.warnings.slice() : [],
@@ -741,6 +746,7 @@ function createSavedBookEditorState(article) {
         mode: 'saved',
         articleId: article?.id,
         title: String(article?.name || '').trim() || '無題',
+        language: getArticleLanguage(article),
         sourceType: article?.sourceType || '',
         sourceName: article?.sourceName || '',
         warnings: [],
@@ -844,6 +850,7 @@ function finalizeImportReviewDocument() {
     });
     return {
         title: String(importReviewState.title || '').trim() || '無題',
+        language: LANGUAGE_PROFILES[importReviewState.language] ? importReviewState.language : 'en',
         sourceType,
         sourceName,
         content: chapters.map(chapter => chapter.content).filter(Boolean).join('\n\n'),
@@ -864,6 +871,7 @@ function finalizeSavedBookEditorDocument() {
     }));
     return {
         title: String(importReviewState.title || '').trim() || '無題',
+        language: LANGUAGE_PROFILES[importReviewState.language] ? importReviewState.language : 'en',
         sourceType: importReviewState.sourceType,
         sourceName: importReviewState.sourceName,
         content: chapters.map(chapter => chapter.content).filter(Boolean).join('\n\n'),
@@ -879,8 +887,10 @@ async function saveImportReviewDocument() {
     pendingImportedDocument = finalized;
     const titleInput = document.getElementById('text-title');
     const bodyInput = document.getElementById('text-input');
+    const languageSelect = document.getElementById('article-language');
     if (titleInput) titleInput.value = finalized.title;
     if (bodyInput) bodyInput.value = finalized.content;
+    if (languageSelect) languageSelect.value = finalized.language || 'en';
     importReviewState = null;
     resetImportReviewSearch();
     await saveNewArticle();
@@ -898,6 +908,7 @@ async function saveSavedBookEditor() {
 
     applySavedReadingPositionResets(article, importReviewState.readingPositionRedirects);
     article.name = finalized.title;
+    article.language = LANGUAGE_PROFILES[finalized.language] ? finalized.language : getArticleLanguage(article);
     article.content = finalized.content;
     article.chapters = finalized.chapters;
     if (finalized.sourceType) article.sourceType = finalized.sourceType;
@@ -1238,12 +1249,21 @@ function renderImportReview() {
     const heading = document.getElementById('chapter-editor-heading');
     const saveButton = document.getElementById('chapter-editor-save');
     const titleInput = document.getElementById('import-review-title');
+    const languageSelect = document.getElementById('import-review-language');
     const source = document.getElementById('import-review-source');
     if (heading) heading.textContent = isSavedBookEditor() ? 'Book Editor' : 'Import Review';
     if (saveButton) saveButton.textContent = isSavedBookEditor() ? '変更を保存' : '保存して読む';
     if (titleInput) {
         titleInput.value = importReviewState.title || '';
         titleInput.oninput = () => { importReviewState.title = titleInput.value; };
+    }
+    if (languageSelect) {
+        languageSelect.value = LANGUAGE_PROFILES[importReviewState.language] ? importReviewState.language : 'en';
+        languageSelect.onchange = () => {
+            importReviewState.language = LANGUAGE_PROFILES[languageSelect.value] ? languageSelect.value : 'en';
+            const articleLanguage = document.getElementById('article-language');
+            if (articleLanguage) articleLanguage.value = importReviewState.language;
+        };
     }
     if (source) source.textContent = isSavedBookEditor()
         ? '保存済み書籍'
