@@ -53,7 +53,7 @@ const SAMPLE_DATA = [
 
 
 const db = localforage.createInstance({ name: "ProjectA_DB_v3" });
-const DEFAULT_READER_SETTINGS = Object.freeze({ fontSize: 18, lineHeight: 1.8 });
+const DEFAULT_READER_SETTINGS = Object.freeze({ fontSize: 18, lineHeight: 1.8, speechRate: 0.85, annotationVisibility: {} });
 
 const LANGUAGE_PROFILES = Object.freeze({
     en: {
@@ -379,6 +379,217 @@ let globalVocabularyState = {
 let readerScrollLockState = null;
 
 // --- 初期化関数 (1つに統合) ---
+
+function getAnnotationVisibilityKey(article = currentArticle, definition = getPrimaryAnnotationDefinition(article)) {
+    if (!definition) return '';
+    return getArticleLanguage(article) + ':' + definition.id;
+}
+
+function isReaderAnnotationVisible(article = currentArticle) {
+    const definition = getPrimaryAnnotationDefinition(article);
+    if (!definition) return false;
+    const key = getAnnotationVisibilityKey(article, definition);
+    return !!readerSettings.annotationVisibility?.[key];
+}
+
+function syncReaderLanguageTools(article = currentArticle) {
+    const definition = getPrimaryAnnotationDefinition(article);
+    const label = document.getElementById('reader-annotation-toggle-label');
+    const text = document.getElementById('reader-annotation-toggle-text');
+    const input = document.getElementById('reader-annotation-toggle');
+    const rate = document.getElementById('reader-speech-rate');
+    if (label) label.style.display = definition ? '' : 'none';
+    if (text && definition) text.textContent = definition.label + '表示';
+    if (input) input.checked = definition ? isReaderAnnotationVisible(article) : false;
+    if (rate) rate.value = String(readerSettings.speechRate || DEFAULT_READER_SETTINGS.speechRate);
+}
+
+async function toggleReaderAnnotation() {
+    if (!currentArticle) return;
+    const definition = getPrimaryAnnotationDefinition(currentArticle);
+    if (!definition) return;
+    const input = document.getElementById('reader-annotation-toggle');
+    const key = getAnnotationVisibilityKey(currentArticle, definition);
+    readerSettings.annotationVisibility = { ...(readerSettings.annotationVisibility || {}), [key]: !!input?.checked };
+    await db.setItem('reader_settings', readerSettings);
+    const position = rememberReadingPosition();
+    renderArticleText();
+    reapplyReaderSearchForCurrentContent();
+    restoreReadingPosition(position);
+}
+
+async function updateSpeechRate(value) {
+    const rate = Math.max(0.5, Math.min(1.5, Number(value) || DEFAULT_READER_SETTINGS.speechRate));
+    readerSettings.speechRate = rate;
+    await db.setItem('reader_settings', readerSettings);
+}
+
+function getSentenceSegments(text, article = currentArticle) {
+    const value = String(text ?? '');
+    if (!value) return [];
+    const profile = getLanguageProfile(article);
+    if (typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function') {
+        try {
+            const segmenter = new Intl.Segmenter(profile.locale, { granularity: 'sentence' });
+            const segments = Array.from(segmenter.segment(value)).map(segment => segment.segment).filter(Boolean);
+            if (segments.length) return segments;
+        } catch (error) {
+            console.warn('Sentence segmentation fallback:', error);
+        }
+    }
+    return value.match(/[^.!?。！？]+[.!?。！？]?\s*/g) || [value];
+}
+
+function renderReaderSentenceHtml(sentence, chapterId) {
+    let html = escapeHtml(sentence);
+    const notes = [...currentArticle.notes]
+        .filter(note => note.chapterId === undefined || note.chapterId === null || String(note.chapterId) === String(chapterId))
+        .sort((left, right) => String(right.originalText || '').length - String(left.originalText || '').length);
+    notes.forEach(note => {
+        if (typeof note.originalText !== 'string' || note.originalText.length < 2) return;
+        const escaped = escapeRegExp(escapeHtml(note.originalText));
+        html = html.replace(new RegExp(`(${escaped})`, 'gi'), `<span class="note-highlight" data-jump-id="${note.id}" data-type="note">$1</span>`);
+    });
+
+    const words = [...currentArticle.words]
+        .filter(word => word.chapterId === undefined || word.chapterId === null || String(word.chapterId) === String(chapterId))
+        .sort((left, right) => String(right.word || '').length - String(left.word || '').length);
+    words.forEach(word => {
+        if (typeof word.word !== 'string' || word.word.length < 2) return;
+        const escaped = escapeRegExp(escapeHtml(word.word));
+        html = html.replace(new RegExp(`(?<!>)${escaped}(?!<)`, 'gi'), `<span class="word-highlight" data-jump-id="${word.id}" data-type="word">$&</span>`);
+    });
+    return html;
+}
+
+function generatePinyinArray(text) {
+    if (!window.pinyinPro || typeof window.pinyinPro.pinyin !== 'function') return [];
+    try {
+        const chars = Array.from(text);
+        const readings = window.pinyinPro.pinyin(text, { toneType: 'symbol', type: 'array' });
+        if (Array.isArray(readings) && readings.length === chars.length) return readings;
+        return chars.map(char => window.pinyinPro.pinyin(char, { toneType: 'symbol', type: 'string' }));
+    } catch (error) {
+        console.warn('Pinyin rendering failed:', error);
+        return [];
+    }
+}
+
+function applyReaderAnnotations() {
+    if (!currentArticle || !isReaderAnnotationVisible(currentArticle)) return;
+    const definition = getPrimaryAnnotationDefinition(currentArticle);
+    if (!definition || definition.display !== 'ruby' || definition.system !== 'pinyin') return;
+    const display = document.getElementById('text-display');
+    if (!display) return;
+
+    const paragraphs = display.querySelectorAll('p[data-paragraph-index]');
+    paragraphs.forEach(paragraph => {
+        const walker = document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT);
+        const nodes = [];
+        let node;
+        while ((node = walker.nextNode())) nodes.push(node);
+        nodes.forEach(textNode => {
+            if (textNode.parentElement?.closest('.sentence-audio-btn')) return;
+            const text = textNode.nodeValue || '';
+            if (!/[\p{Script=Han}]/u.test(text)) return;
+
+            const fragment = document.createDocumentFragment();
+            let cursor = 0;
+            const pattern = /[\p{Script=Han}]+/gu;
+            let match;
+            while ((match = pattern.exec(text)) !== null) {
+                if (match.index > cursor) fragment.appendChild(document.createTextNode(text.slice(cursor, match.index)));
+                const run = match[0];
+                const chars = Array.from(run);
+                const readings = generatePinyinArray(run);
+                chars.forEach((char, index) => {
+                    const ruby = document.createElement('span');
+                    ruby.className = 'reader-ruby';
+                    ruby.dataset.annotation = String(readings[index] || '');
+                    ruby.textContent = char;
+                    fragment.appendChild(ruby);
+                });
+                cursor = match.index + run.length;
+            }
+            if (cursor < text.length) fragment.appendChild(document.createTextNode(text.slice(cursor)));
+            textNode.replaceWith(fragment);
+        });
+    });
+}
+
+let readerAudioSequenceToken = 0;
+
+function clearActiveReaderSentence() {
+    document.querySelectorAll('.reader-sentence.is-speaking').forEach(element => element.classList.remove('is-speaking'));
+}
+
+function stopReaderAudio() {
+    readerAudioSequenceToken += 1;
+    if ('speechSynthesis' in window) speechSynthesis.cancel();
+    clearActiveReaderSentence();
+}
+
+function createReaderUtterance(text, language = null) {
+    const profile = LANGUAGE_PROFILES[language] || getLanguageProfile(currentArticle);
+    const utterance = new SpeechSynthesisUtterance(String(text || ''));
+    utterance.lang = profile.locale;
+    utterance.rate = Number(readerSettings.speechRate) || DEFAULT_READER_SETTINGS.speechRate;
+    return utterance;
+}
+
+function speakText(text, language = null, sentenceElement = null) {
+    if (!('speechSynthesis' in window) || !String(text || '').trim()) return;
+    stopReaderAudio();
+    const token = readerAudioSequenceToken;
+    const utterance = createReaderUtterance(text, language);
+    if (sentenceElement) sentenceElement.classList.add('is-speaking');
+    utterance.onend = utterance.onerror = () => {
+        if (token === readerAudioSequenceToken) clearActiveReaderSentence();
+    };
+    speechSynthesis.speak(utterance);
+}
+
+function bindSentenceAudioControls() {
+    const display = document.getElementById('text-display');
+    if (!display) return;
+    display.querySelectorAll('.reader-sentence').forEach(sentence => {
+        const button = sentence.querySelector('.sentence-audio-btn');
+        if (!button) return;
+        button.addEventListener('click', event => {
+            event.stopPropagation();
+            speakText(sentence.textContent, getArticleLanguage(currentArticle), sentence);
+        });
+    });
+}
+
+function playAllSentences() {
+    if (!('speechSynthesis' in window) || !currentArticle) return;
+    stopReaderAudio();
+    const token = readerAudioSequenceToken;
+    const sentences = Array.from(document.querySelectorAll('#text-display .reader-sentence'))
+        .filter(sentence => String(sentence.textContent || '').trim());
+    let index = 0;
+
+    const playNext = () => {
+        if (token !== readerAudioSequenceToken || index >= sentences.length) {
+            clearActiveReaderSentence();
+            return;
+        }
+        clearActiveReaderSentence();
+        const sentence = sentences[index++];
+        sentence.classList.add('is-speaking');
+        sentence.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        const utterance = createReaderUtterance(sentence.textContent, getArticleLanguage(currentArticle));
+        utterance.onend = () => {
+            if (token === readerAudioSequenceToken) playNext();
+        };
+        utterance.onerror = () => {
+            if (token === readerAudioSequenceToken) playNext();
+        };
+        speechSynthesis.speak(utterance);
+    };
+    playNext();
+}
 async function init() {
     // DBからデータを取得
     libraryItems = await db.getItem('library_items') || [];
@@ -390,10 +601,17 @@ async function init() {
     }
 
     const savedSet = await db.getItem('reader_settings');
-    if (savedSet) { 
-        readerSettings = savedSet; 
-        applySettings(); 
+    if (savedSet) {
+        readerSettings = {
+            ...DEFAULT_READER_SETTINGS,
+            ...savedSet,
+            annotationVisibility: {
+                ...DEFAULT_READER_SETTINGS.annotationVisibility,
+                ...(savedSet.annotationVisibility || {})
+            }
+        };
     }
+    applySettings();
 
     showLibrary(); 
     renderList('words');
@@ -1911,6 +2129,7 @@ async function switchToChapter(chapterId, options = {}) {
     currentChapterId = target.id;
     renderChapterNavigation();
     syncAnkiTargetOptions(currentArticle);
+    syncReaderLanguageTools(currentArticle);
     renderArticleText();
     reapplyReaderSearchForCurrentContent();
     renderList(currentTab, document.getElementById('list-search')?.value || '');
@@ -1969,37 +2188,28 @@ function openArticle(id) {
     restoreReadingPosition(getSavedPositionForChapter(currentArticle, currentChapterId));
 }
 
-function renderArticleText() {
-    if(!currentArticle) return;
+function renderArticleText({ skipAnnotations = false } = {}) {
+    if (!currentArticle) return;
     ensureArticleCollections(currentArticle);
+    syncReaderLanguageTools(currentArticle);
     const display = document.getElementById('text-display');
     const content = getCurrentChapterContent();
-    const currentChapterIdForHighlight = getCurrentChapterId();
-    let html = getReaderParagraphs(content)
-        .map((paragraph, index) => `<p data-paragraph-index="${index}">${escapeHtml(paragraph)}</p>`)
-        .join('');
-    
-    // ハイライト置換 (ノート > 単語 の順で処理)
-    const sn = [...currentArticle.notes].sort((a,b) => String(b.originalText || '').length - String(a.originalText || '').length);
-    sn.forEach(n => {
-        if (n.chapterId !== undefined && n.chapterId !== null && String(n.chapterId) !== currentChapterIdForHighlight) return;
-        if (typeof n.originalText !== 'string' || n.originalText.length < 2) return;
-        const escaped = escapeRegExp(escapeHtml(n.originalText));
-        html = html.replace(new RegExp(`(${escaped})`, 'gi'), `<span class="note-highlight" data-jump-id="${n.id}" data-type="note">$1</span>`);
-    });
+    const chapterId = getCurrentChapterId();
+    const paragraphs = getReaderParagraphs(content);
 
-    const sw = [...currentArticle.words].sort((a,b) => String(b.word || '').length - String(a.word || '').length);
-    sw.forEach(w => {
-        if (w.chapterId !== undefined && w.chapterId !== null && String(w.chapterId) !== currentChapterIdForHighlight) return;
-        if (typeof w.word !== 'string' || w.word.length < 2) return;
-        const escaped = escapeRegExp(escapeHtml(w.word));
-        html = html.replace(new RegExp(`(?<!>)${escaped}(?!<)`, 'gi'), `<span class="word-highlight" data-jump-id="${w.id}" data-type="word">$&</span>`);
-    });
+    display.innerHTML = paragraphs.map((paragraph, paragraphIndex) => {
+        const sentences = getSentenceSegments(paragraph, currentArticle);
+        const sentenceHtml = (sentences.length ? sentences : [paragraph]).map((sentence, sentenceIndex) => {
+            const highlighted = renderReaderSentenceHtml(sentence, chapterId);
+            return `<span class="reader-sentence" data-sentence-index="${sentenceIndex}"><button type="button" class="sentence-audio-btn" aria-label="この文を再生"></button>${highlighted}</span>`;
+        }).join('');
+        return `<p data-paragraph-index="${paragraphIndex}">${sentenceHtml}</p>`;
+    }).join('');
 
-    display.innerHTML = html;
+    bindSentenceAudioControls();
+    if (!skipAnnotations) applyReaderAnnotations();
     updateProgress(null, true);
 }
-
 function hasActiveReaderTextSelection() {
     const selection = window.getSelection?.();
     const display = document.getElementById('text-display');
@@ -2764,14 +2974,14 @@ async function toggleWordStudyTarget(id, targetId, e, sourceIndex = null) {
     restoreReadingPosition(readingPosition);
 }
 function speakWord(text, language = null) {
-    if (!('speechSynthesis' in window)) return;
-    const profile = LANGUAGE_PROFILES[language] || getLanguageProfile(currentArticle);
-    speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(String(text || ''));
-    utterance.lang = profile.locale;
-    speechSynthesis.speak(utterance);
+    speakText(text, language);
 }
-function applySettings() { document.documentElement.style.setProperty('--reader-font-size', readerSettings.fontSize+'px'); document.documentElement.style.setProperty('--reader-line-height', readerSettings.lineHeight); }
+function applySettings() {
+    document.documentElement.style.setProperty('--reader-font-size', readerSettings.fontSize + 'px');
+    document.documentElement.style.setProperty('--reader-line-height', readerSettings.lineHeight);
+    const rate = document.getElementById('reader-speech-rate');
+    if (rate) rate.value = String(readerSettings.speechRate || DEFAULT_READER_SETTINGS.speechRate);
+}
 function renderSettingsUI(c) { c.innerHTML = `<div class="settings-group"><p>文字: ${readerSettings.fontSize}px</p><input type="range" min="14" max="30" value="${readerSettings.fontSize}" oninput="updateSetting('font', this.value)"><p>行間: ${readerSettings.lineHeight}</p><input type="range" min="1.2" max="2.5" step="0.1" value="${readerSettings.lineHeight}" oninput="updateSetting('line', this.value)"></div>`; }
 function updateSetting(t, v) { if (t==='font') readerSettings.fontSize=v; else readerSettings.lineHeight=v; applySettings(); db.setItem('reader_settings', readerSettings); renderList('settings'); }
 function createNewFolder() { const n = prompt("フォルダ名"); if(n){ libraryItems.push({id:Date.now(), type:'folder', name:n, parentId:currentFolderId}); saveToDB(); showLibrary(); } }
@@ -3411,15 +3621,17 @@ function searchInText() {
         ? buildBookSearchResults(currentArticle, query, readerSearchState.wholeWord, readerSearchState.caseSensitive)
         : [];
 
-    renderArticleText();
+    renderArticleText({ skipAnnotations: true });
     if (!query) {
         readerSearchState.results = [];
         updateSearchCount();
+        applyReaderAnnotations();
         restoreReadingPosition(position);
         return;
     }
 
     applySearchHighlights();
+    applyReaderAnnotations();
     readerSearchState.currentIndex = -1;
     updateSearchCount();
     restoreReadingPosition(position);
