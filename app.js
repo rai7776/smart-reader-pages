@@ -1785,7 +1785,8 @@ function getGlobalSearchMatches(value, options) {
         String(value ?? ''),
         String(options?.query || ''),
         !!options?.wholeWord,
-        !!options?.caseSensitive
+        !!options?.caseSensitive,
+        options?.language || null
     );
 }
 
@@ -1810,19 +1811,20 @@ function getGlobalSearchMatchInfo(item, options) {
     if (item.type === 'folder') return { titleMatches };
 
     const searchableContent = getArticleSearchableText(item);
-    const contentMatches = getGlobalSearchMatches(searchableContent, options);
+    const languageOptions = { ...options, language: getArticleLanguage(item) };
+    const contentMatches = getGlobalSearchMatches(searchableContent, languageOptions);
     const definition = getPrimaryAnnotationDefinition(item);
     const wordMatches = (Array.isArray(item.words) ? item.words : []).filter(word => [
         word?.word,
         definition ? getWordAnnotationValue(word, definition.id) : '',
         word?.meaning,
         word?.memo
-    ].some(value => getGlobalSearchMatches(value, options).length > 0));
+    ].some(value => getGlobalSearchMatches(value, languageOptions).length > 0));
     const noteMatches = (Array.isArray(item.notes) ? item.notes : []).filter(note => [
         note?.originalText,
         note?.translation,
         note?.extra
-    ].some(value => getGlobalSearchMatches(value, options).length > 0));
+    ].some(value => getGlobalSearchMatches(value, languageOptions).length > 0));
     return { titleMatches, contentMatches, wordMatches, noteMatches, searchableContent };
 }
 
@@ -3488,25 +3490,55 @@ function updateSearchCount() {
 }
 
 function isSearchWordCharacter(char) {
-    return !!char && /[A-Za-z]/.test(char);
+    return !!char && /[\p{L}\p{N}\p{M}_]/u.test(char);
 }
 
-function findSearchMatches(text, query, wholeWord, caseSensitive) {
-    const haystack = caseSensitive ? text : text.toLocaleLowerCase();
-    const needle = caseSensitive ? query : query.toLocaleLowerCase();
+function getSegmentedWordRanges(text, language = null) {
+    const value = String(text ?? '');
+    const profile = LANGUAGE_PROFILES[language] || getLanguageProfile(currentArticle);
+    if (typeof Intl === 'undefined' || typeof Intl.Segmenter !== 'function') return null;
+    try {
+        const segmenter = new Intl.Segmenter(profile.locale, { granularity: 'word' });
+        return new Set(
+            Array.from(segmenter.segment(value))
+                .filter(segment => segment.isWordLike)
+                .map(segment => `${segment.index}:${segment.segment.length}`)
+        );
+    } catch (error) {
+        return null;
+    }
+}
+
+function findSearchMatches(text, query, wholeWord, caseSensitive, language = null) {
+    const sourceText = String(text ?? '');
+    const sourceQuery = String(query ?? '');
+    const haystack = caseSensitive ? sourceText : sourceText.toLocaleLowerCase();
+    const needle = caseSensitive ? sourceQuery : sourceQuery.toLocaleLowerCase();
     const matches = [];
     if (!needle) return matches;
+
+    const profile = LANGUAGE_PROFILES[language] || getLanguageProfile(currentArticle);
+    const segmentedRanges = wholeWord && profile.id !== 'en'
+        ? getSegmentedWordRanges(sourceText, profile.id)
+        : null;
 
     let start = 0;
     while (start < haystack.length) {
         const index = haystack.indexOf(needle, start);
         if (index === -1) break;
-        const before = text[index - 1];
-        const after = text[index + needle.length];
-        if (!wholeWord || (!isSearchWordCharacter(before) && !isSearchWordCharacter(after))) {
-            matches.push({ index, length: needle.length });
+
+        let accepted = true;
+        if (wholeWord) {
+            if (segmentedRanges) {
+                accepted = segmentedRanges.has(`${index}:${sourceQuery.length}`);
+            } else {
+                const before = sourceText[index - 1];
+                const after = sourceText[index + sourceQuery.length];
+                accepted = !isSearchWordCharacter(before) && !isSearchWordCharacter(after);
+            }
         }
-        start = index + Math.max(needle.length, 1);
+        if (accepted) matches.push({ index, length: sourceQuery.length });
+        start = index + Math.max(sourceQuery.length, 1);
     }
     return matches;
 }
@@ -3516,7 +3548,7 @@ function buildBookSearchResults(article, query, wholeWord, caseSensitive) {
     const results = [];
     getArticleChapters(article).forEach((chapter, chapterIndex) => {
         getReaderParagraphs(chapter.content).forEach((paragraph, paragraphIndex) => {
-            findSearchMatches(paragraph, query, wholeWord, caseSensitive).forEach((hit, matchIndexInParagraph) => {
+            findSearchMatches(paragraph, query, wholeWord, caseSensitive, getArticleLanguage(article)).forEach((hit, matchIndexInParagraph) => {
                 results.push({
                     chapterId: chapter.id,
                     chapterIndex,
@@ -3552,7 +3584,8 @@ function applySearchHighlights() {
             text,
             readerSearchState.query,
             readerSearchState.wholeWord,
-            readerSearchState.caseSensitive
+            readerSearchState.caseSensitive,
+            getArticleLanguage(currentArticle)
         );
         if (hits.length === 0) return;
 
