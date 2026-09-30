@@ -78,6 +78,8 @@
                         <option value="both">単語と意味を隠す</option>
                         <option value="word">単語を隠す</option>
                         <option value="meaning">意味を隠す</option>
+                        <option value="reading">読みを隠す</option>
+                        <option value="learning">読みと意味を隠す</option>
                     </select>
                     <button class="btn-export" onclick="exportGlobalVocabularyCSV()">全単語をCSV出力</button>
                 </div>
@@ -205,6 +207,24 @@
                     <label><input type="checkbox" id="search-whole-word" onchange="searchInText()"> 単語一致</label>
                     <label><input type="checkbox" id="search-case-sensitive" onchange="searchInText()"> Aa</label>
                 </div>
+            </div>
+
+            <div id="reader-language-tools" class="reader-language-tools">
+                <label id="reader-annotation-toggle-label" class="reader-tool-toggle" style="display:none;">
+                    <input type="checkbox" id="reader-annotation-toggle" onchange="toggleReaderAnnotation()">
+                    <span id="reader-annotation-toggle-text">読み表示</span>
+                </label>
+                <label class="reader-tool-rate">
+                    <span>音声</span>
+                    <select id="reader-speech-rate" onchange="updateSpeechRate(this.value)" aria-label="読み上げ速度">
+                        <option value="0.7">0.7×</option>
+                        <option value="0.85">0.85×</option>
+                        <option value="1">1.0×</option>
+                        <option value="1.2">1.2×</option>
+                    </select>
+                </label>
+                <button type="button" id="reader-play-all" class="reader-tool-button" onclick="playAllSentences()">▶ 連続再生</button>
+                <button type="button" id="reader-stop-audio" class="reader-tool-button" onclick="stopReaderAudio()">■ 停止</button>
             </div>
 
             <div id="chapter-navigation" class="chapter-navigation" style="display:none;">
