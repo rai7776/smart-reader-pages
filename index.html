@@ -52,7 +52,7 @@
                     <button class="btn-sub" onclick="showLibrary()">📚 Library</button>
                     <div>
                         <h2>Global Vocabulary</h2>
-                        <span id="global-vocab-count" class="vocabulary-count">0 words</span>
+                        <span id="global-vocab-count" class="vocabulary-count">0 件</span>
                     </div>
                 </div>
                 <div id="global-vocab-statistics" class="vocabulary-statistics" aria-live="polite"></div>
@@ -379,7 +379,7 @@
                 <h2>Word Statistics</h2>
                 <button type="button" class="close-btn" onclick="closeWordStatistics()">✕</button>
             </div>
-            <label class="vocabulary-check"><input type="checkbox" id="frequency-exclude-common" onchange="renderWordStatistics()"> 一般語を除外</label>
+            <label id="frequency-exclude-common-label" class="vocabulary-check"><input type="checkbox" id="frequency-exclude-common" onchange="renderWordStatistics()"> 一般語を除外</label>
             <p id="word-statistics-summary" class="word-statistics-summary"></p>
             <div id="word-statistics-list" class="word-statistics-list"></div>
         </div>
