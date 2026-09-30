@@ -1593,8 +1593,10 @@ function getGlobalSearchMatchInfo(item, options) {
 
     const searchableContent = getArticleSearchableText(item);
     const contentMatches = getGlobalSearchMatches(searchableContent, options);
+    const definition = getPrimaryAnnotationDefinition(item);
     const wordMatches = (Array.isArray(item.words) ? item.words : []).filter(word => [
         word?.word,
+        definition ? getWordAnnotationValue(word, definition.id) : '',
         word?.meaning,
         word?.memo
     ].some(value => getGlobalSearchMatches(value, options).length > 0));
@@ -2371,16 +2373,18 @@ function extractSentenceContext(text, startOffset = 0, endOffset = startOffset) 
     const end = Math.max(start, Math.min(Number(endOffset) || start, value.length));
     const before = value.slice(0, start);
     const after = value.slice(end);
-    const boundaryBefore = Math.max(before.lastIndexOf('. '), before.lastIndexOf('! '), before.lastIndexOf('? '));
-    const boundaryAfter = [after.indexOf('.'), after.indexOf('!'), after.indexOf('?')]
-        .filter(index => index >= 0)
-        .sort((left, right) => left - right)[0];
-    const sentenceStart = boundaryBefore >= 0 ? boundaryBefore + 2 : 0;
-    const sentenceEnd = boundaryAfter === undefined ? value.length : end + boundaryAfter + 1;
+
+    let sentenceStart = 0;
+    const boundaryPattern = /[.!?。！？]\s*/g;
+    let match;
+    while ((match = boundaryPattern.exec(before)) !== null) {
+        sentenceStart = match.index + match[0].length;
+    }
+    const afterBoundary = after.match(/[.!?。！？]/);
+    const sentenceEnd = afterBoundary ? end + afterBoundary.index + 1 : value.length;
     const sentence = value.slice(sentenceStart, sentenceEnd).trim();
     return sentence || value;
 }
-
 function captureReaderSelection(range, selected) {
     const paragraph = getReaderParagraphElement(range.startContainer);
     if (!paragraph) return null;
@@ -2632,8 +2636,8 @@ function getReaderWordCounts(article = currentArticle) {
         ? getArticleChapters(article).reduce((sum, chapter) => sum + String(chapter.content || '').length, 0)
         : bookText.length;
     return {
-        chapter: countEnglishWords(chapterText),
-        book: countEnglishWords(bookText),
+        chapter: countLanguageWords(chapterText, article),
+        book: countLanguageWords(bookText, article),
         chapterChars: chapterText.length,
         bookChars
     };
@@ -2666,6 +2670,7 @@ function normalizeVocabularyWord(value) {
 
 function getArticleVocabularyStatistics(article = currentArticle) {
     const words = Array.isArray(article?.words) ? article.words : [];
+    words.forEach(word => normalizeWordLearningState(word, article));
     return {
         total: words.length,
         unique: new Set(words.map(word => normalizeVocabularyWord(word.word)).filter(Boolean)).size,
@@ -2681,7 +2686,7 @@ function renderArticleVocabularyStatistics(type = currentTab) {
         return;
     }
     const stats = getArticleVocabularyStatistics(currentArticle);
-    target.textContent = `${stats.total} words · ${stats.unique} unique · ${stats.memorized} memorized`;
+    target.textContent = `${stats.total}件 · ${stats.unique}語 · ${stats.memorized}習得済み`;
 }
 
 function updateProgress(event, forceWordCount = false) {
@@ -2704,7 +2709,12 @@ function updateProgress(event, forceWordCount = false) {
     const bookProgress = getBookScrollProgress(currentArticle, chapterProgress);
     const hasMultipleChapters = hasStoredChapters(currentArticle) && getCurrentChapters().length > 1;
     const wordCount = document.getElementById('word-count');
-    if (wordCount) wordCount.innerText = `${readerWordCounts.chapter.toLocaleString()} words`;
+    if (wordCount) {
+        const unit = getLanguageProfile(currentArticle).wordUnit;
+        wordCount.innerText = unit === 'words'
+            ? `${readerWordCounts.chapter.toLocaleString()} words`
+            : `${readerWordCounts.chapter.toLocaleString()} ${unit}`;
+    }
     const charCount = document.getElementById('char-count');
     if (charCount) charCount.innerText = `${readerWordCounts.chapterChars.toLocaleString()}文字`;
     const progress = Math.round(chapterProgress * 100);
@@ -2718,7 +2728,12 @@ function updateProgress(event, forceWordCount = false) {
     const bookWordCount = document.getElementById('book-word-count');
     const bookCharCount = document.getElementById('book-char-count');
     const bookReadProgress = document.getElementById('book-read-progress');
-    if (bookWordCount) bookWordCount.innerText = `${readerWordCounts.book.toLocaleString()} words`;
+    if (bookWordCount) {
+        const unit = getLanguageProfile(currentArticle).wordUnit;
+        bookWordCount.innerText = unit === 'words'
+            ? `${readerWordCounts.book.toLocaleString()} words`
+            : `${readerWordCounts.book.toLocaleString()} ${unit}`;
+    }
     if (bookCharCount) bookCharCount.innerText = `${readerWordCounts.bookChars.toLocaleString()}文字`;
     if (bookReadProgress) bookReadProgress.innerText = `${Math.round(bookProgress * 100)}%`;
     if (event && event.type === 'scroll') scheduleReadingPositionSave();
@@ -2781,15 +2796,15 @@ const COMMON_FREQUENCY_WORDS = new Set(['the', 'a', 'an', 'and', 'or', 'but', 'o
 
 function getWordFrequency(article, excludeCommon = false) {
     const counts = new Map();
-    getEnglishTokens(getArticleFullText(article)).forEach(token => {
-        const word = token.toLocaleLowerCase();
-        if (excludeCommon && COMMON_FREQUENCY_WORDS.has(word)) return;
+    const profile = getLanguageProfile(article);
+    getLanguageTokens(getArticleFullText(article), article).forEach(token => {
+        const word = String(token).toLocaleLowerCase();
+        if (profile.id === 'en' && excludeCommon && COMMON_FREQUENCY_WORDS.has(word)) return;
         counts.set(word, (counts.get(word) || 0) + 1);
     });
     return Array.from(counts, ([word, count]) => ({ word, count }))
-        .sort((left, right) => right.count - left.count || left.word.localeCompare(right.word));
+        .sort((left, right) => right.count - left.count || left.word.localeCompare(right.word, profile.locale));
 }
-
 function openWordStatistics() {
     if (!currentArticle) return;
     document.getElementById('word-statistics-overlay')?.classList.add('show');
@@ -2806,8 +2821,11 @@ function renderWordStatistics() {
     if (!container || !currentArticle) return;
     const excludeCommon = !!document.getElementById('frequency-exclude-common')?.checked;
     const frequency = getWordFrequency(currentArticle, excludeCommon).slice(0, 80);
-    const total = countEnglishWords(getArticleFullText(currentArticle));
-    if (summary) summary.textContent = `${total.toLocaleString()} words · ${frequency.length} 件を表示`;
+    const total = countLanguageWords(getArticleFullText(currentArticle), currentArticle);
+    const unit = getLanguageProfile(currentArticle).wordUnit;
+    if (summary) summary.textContent = unit === 'words'
+        ? `${total.toLocaleString()} words · ${frequency.length} 件を表示`
+        : `${total.toLocaleString()} ${unit} · ${frequency.length} 件を表示`;
     container.innerHTML = '';
     frequency.forEach(entry => {
         const row = document.createElement('button');
