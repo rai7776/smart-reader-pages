@@ -1468,7 +1468,9 @@ function showInputArea() {
     resetImportReviewSearch();
     document.getElementById('input-title-label').innerText = "記事を登録";
     document.getElementById('text-title').value = ""; 
-    document.getElementById('text-url').value = ""; 
+    document.getElementById('text-url').value = "";
+    const languageSelect = document.getElementById('article-language');
+    if (languageSelect) languageSelect.value = 'en';
     document.getElementById('text-input').value = "";
     document.getElementById('text-input').readOnly = false;
     document.getElementById('input-area').style.display = 'block';
@@ -1487,7 +1489,9 @@ function editCurrentArticle() {
     hideAllSections(); 
     document.getElementById('input-title-label').innerText = "記事を編集";
     document.getElementById('text-title').value = currentArticle.name; 
-    document.getElementById('text-url').value = currentArticle.url || ""; 
+    document.getElementById('text-url').value = currentArticle.url || "";
+    const languageSelect = document.getElementById('article-language');
+    if (languageSelect) languageSelect.value = getArticleLanguage(currentArticle);
     document.getElementById('text-input').value = typeof currentArticle.content === 'string' && currentArticle.content
         ? currentArticle.content
         : getArticleFullText(currentArticle);
@@ -1499,6 +1503,7 @@ async function saveNewArticle() {
     const name = document.getElementById('text-title').value || "無題";
     const content = document.getElementById('text-input').value;
     const url = document.getElementById('text-url').value;
+    const language = document.getElementById('article-language')?.value || 'en';
     const imported = pendingImportedDocument;
     const importedContent = getImportedDocumentText(imported);
     if (!imported && !content) return alert("本文を入力してください");
@@ -1513,6 +1518,7 @@ async function saveNewArticle() {
             art.name = name;
             art.content = imported ? importedContent : content;
             art.url = url;
+            art.language = LANGUAGE_PROFILES[language] ? language : 'en';
             if (imported) {
                 art.chapters = imported.chapters;
                 art.sourceType = imported.sourceType;
@@ -1527,6 +1533,7 @@ async function saveNewArticle() {
             parentId: currentFolderId,
             content: imported ? importedContent : content,
             url,
+            language: LANGUAGE_PROFILES[language] ? language : 'en',
             words: [], notes: [], bookmarks: [] 
         };
         if (imported) {
@@ -1901,6 +1908,7 @@ async function switchToChapter(chapterId, options = {}) {
 
     currentChapterId = target.id;
     renderChapterNavigation();
+    syncAnkiTargetOptions(currentArticle);
     renderArticleText();
     reapplyReaderSearchForCurrentContent();
     renderList(currentTab, document.getElementById('list-search')?.value || '');
@@ -2277,9 +2285,11 @@ function openUnifiedModal() {
 // --- 共通ユーティリティ ---
 function ensureArticleCollections(article) {
     if (!article) return;
+    if (!LANGUAGE_PROFILES[article.language]) article.language = 'en';
     if (!Array.isArray(article.words)) article.words = [];
     if (!Array.isArray(article.notes)) article.notes = [];
     if (!Array.isArray(article.bookmarks)) article.bookmarks = [];
+    article.words.forEach(word => normalizeWordLearningState(word, article));
 }
 
 function getActiveChapterIdForItem() {
