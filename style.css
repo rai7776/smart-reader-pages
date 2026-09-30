@@ -419,7 +419,21 @@ input, textarea, select { font-size: 16px !important; }
 .import-review-header .file-import-message { white-space: pre-line; }
 .import-review-action-feedback { display: none; }
 .import-review-source { color: #777; font-size: 0.8em; text-align: right; overflow-wrap: anywhere; }
-.import-review-title-row label { flex-shrink: 0; font-weight: 600; }
+.import-review-title-row label,
+.import-review-language-row label { flex-shrink: 0; font-weight: 600; }
+.import-review-language-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+.import-review-language-row select {
+    min-width: 180px;
+    padding: 8px 10px;
+    border: 1px solid #d8d8d8;
+    border-radius: 6px;
+    background: #fafafa;
+}
 .import-review-title-row input,
 .import-review-search-bar input,
 .import-review-search-bar select,
@@ -1123,3 +1137,216 @@ input, textarea, select { font-size: 16px !important; }
     .word-statistics-modal { width: calc(100% - 24px); }
 }
 
+
+
+/* --- Multilingual foundation -------------------------------------------- */
+.article-language-field {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: 10px;
+}
+.article-language-field label {
+    font-size: 0.85em;
+    font-weight: 700;
+    color: #555;
+}
+.article-language-field select {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    background: #fafafa;
+    font-size: 15px;
+}
+
+.language-annotation-field {
+    margin-top: 4px;
+}
+.annotation-input-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+.annotation-input-row input {
+    min-width: 0;
+    flex: 1;
+}
+.annotation-input-row .btn-sub {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    padding: 8px 10px;
+}
+.annotation-help {
+    display: block;
+    margin-top: 4px;
+    color: #777;
+    font-size: 0.76em;
+    line-height: 1.35;
+}
+
+.word-main-stack {
+    display: inline-flex;
+    min-width: 0;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1px;
+}
+.reading-text {
+    color: #68727a;
+    font-size: 0.8em;
+    font-weight: 500;
+    line-height: 1.2;
+}
+.word-speaker {
+    cursor: pointer;
+    flex: 0 0 auto;
+}
+.word-study-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px 12px;
+    margin-top: 6px;
+    padding-left: 22px;
+}
+.word-study-target {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: #666;
+    font-size: 0.78em;
+    cursor: pointer;
+}
+.word-study-target input {
+    margin: 0;
+}
+.anki-mask-reading .reading-text,
+.anki-mask-learning .reading-text,
+.anki-mask-learning .meaning-right {
+    visibility: hidden;
+}
+.revealed .reading-text {
+    visibility: visible !important;
+}
+
+.reader-language-tools {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 7px;
+    padding: 7px 12px;
+    border-bottom: 1px solid #eee;
+    background: #fbfbfb;
+    font-size: 0.82em;
+}
+.reader-tool-toggle,
+.reader-tool-rate {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    color: #555;
+}
+.reader-tool-toggle {
+    cursor: pointer;
+}
+.reader-tool-rate select {
+    padding: 4px 6px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    background: white;
+}
+.reader-tool-button {
+    padding: 5px 9px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    background: white;
+    color: var(--primary);
+    cursor: pointer;
+}
+.reader-tool-button:hover {
+    background: #f1f6f7;
+}
+
+.reader-sentence {
+    border-radius: 4px;
+    transition: background-color 0.15s ease;
+}
+.reader-sentence.is-speaking {
+    background: rgba(116, 161, 173, 0.16);
+}
+.sentence-audio-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.35em;
+    height: 1.35em;
+    margin: 0 0.12em 0 0;
+    padding: 0;
+    vertical-align: 0.05em;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: #77838a;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.12s ease, background-color 0.12s ease;
+}
+.sentence-audio-btn::before {
+    content: "🔊";
+    font-size: 0.72em;
+}
+.reader-sentence:hover > .sentence-audio-btn,
+.sentence-audio-btn:focus-visible,
+.reader-sentence.is-speaking > .sentence-audio-btn {
+    opacity: 0.7;
+}
+.sentence-audio-btn:hover {
+    background: rgba(116, 161, 173, 0.12);
+    opacity: 1 !important;
+}
+
+/*
+ * Pinyin/furigana-like annotations are rendered with generated content rather
+ * than extra text nodes. This keeps paragraph textContent equal to the raw
+ * article text, so existing anchors, selections and search offsets stay stable.
+ */
+.reader-ruby {
+    position: relative;
+    display: inline-block;
+    padding-top: 0.78em;
+}
+.reader-ruby::before {
+    content: attr(data-annotation);
+    position: absolute;
+    left: 50%;
+    top: -0.05em;
+    transform: translateX(-50%);
+    max-width: 4.5em;
+    overflow: visible;
+    white-space: nowrap;
+    color: #68727a;
+    font-size: 0.5em;
+    font-weight: 500;
+    line-height: 1;
+    pointer-events: none;
+    user-select: none;
+}
+
+@media (hover: none) {
+    .sentence-audio-btn {
+        opacity: 0.5;
+    }
+}
+
+@media (max-width: 640px) {
+    .reader-language-tools {
+        padding: 6px 8px;
+        gap: 6px;
+    }
+    .reader-tool-button {
+        padding: 5px 7px;
+    }
+    .word-study-row {
+        padding-left: 0;
+    }
+}

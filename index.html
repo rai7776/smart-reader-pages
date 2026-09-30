@@ -52,12 +52,12 @@
                     <button class="btn-sub" onclick="showLibrary()">📚 Library</button>
                     <div>
                         <h2>Global Vocabulary</h2>
-                        <span id="global-vocab-count" class="vocabulary-count">0 words</span>
+                        <span id="global-vocab-count" class="vocabulary-count">0 件</span>
                     </div>
                 </div>
                 <div id="global-vocab-statistics" class="vocabulary-statistics" aria-live="polite"></div>
                 <div class="vocabulary-controls">
-                    <input type="search" id="global-vocab-search" placeholder="単語・意味・メモ・出典を検索" oninput="updateGlobalVocabulary('query', this.value)">
+                    <input type="search" id="global-vocab-search" placeholder="単語・読み・意味・メモ・出典を検索" oninput="updateGlobalVocabulary('query', this.value)">
                     <label class="vocabulary-check"><input type="checkbox" id="global-vocab-exact" onchange="updateGlobalVocabulary('exact', this.checked)"> 完全一致</label>
                     <select id="global-vocab-status" onchange="updateGlobalVocabulary('status', this.value)" aria-label="暗記状態">
                         <option value="all">すべて</option>
@@ -78,6 +78,8 @@
                         <option value="both">単語と意味を隠す</option>
                         <option value="word">単語を隠す</option>
                         <option value="meaning">意味を隠す</option>
+                        <option value="reading">読みを隠す</option>
+                        <option value="learning">読みと意味を隠す</option>
                     </select>
                     <button class="btn-export" onclick="exportGlobalVocabularyCSV()">全単語をCSV出力</button>
                 </div>
@@ -97,6 +99,13 @@
             <div class="full-width-form">
                 <input type="text" id="text-title" placeholder="タイトルの名前">
                 <input type="url" id="text-url" placeholder="出典URL（https://...）">
+                <div class="article-language-field">
+                    <label for="article-language">学習言語</label>
+                    <select id="article-language" onchange="handleArticleLanguageChange()">
+                        <option value="en">英語</option>
+                        <option value="zh">中国語（普通話・簡体字）</option>
+                    </select>
+                </div>
                 <textarea id="text-input" placeholder="本文を入力..."></textarea>
             </div>
             <div class="input-actions">
@@ -118,6 +127,13 @@
             <div class="import-review-title-row">
                 <label for="import-review-title">Title:</label>
                 <input type="text" id="import-review-title" placeholder="タイトル">
+            </div>
+            <div class="import-review-language-row">
+                <label for="import-review-language">学習言語:</label>
+                <select id="import-review-language">
+                    <option value="en">英語</option>
+                    <option value="zh">中国語（普通話・簡体字）</option>
+                </select>
             </div>
 
             <div class="import-review-search-bar">
@@ -198,6 +214,24 @@
                     <label><input type="checkbox" id="search-whole-word" onchange="searchInText()"> 単語一致</label>
                     <label><input type="checkbox" id="search-case-sensitive" onchange="searchInText()"> Aa</label>
                 </div>
+            </div>
+
+            <div id="reader-language-tools" class="reader-language-tools">
+                <label id="reader-annotation-toggle-label" class="reader-tool-toggle" style="display:none;">
+                    <input type="checkbox" id="reader-annotation-toggle" onchange="toggleReaderAnnotation()">
+                    <span id="reader-annotation-toggle-text">読み表示</span>
+                </label>
+                <label class="reader-tool-rate">
+                    <span>音声</span>
+                    <select id="reader-speech-rate" onchange="updateSpeechRate(this.value)" aria-label="読み上げ速度">
+                        <option value="0.7">0.7×</option>
+                        <option value="0.85">0.85×</option>
+                        <option value="1">1.0×</option>
+                        <option value="1.2">1.2×</option>
+                    </select>
+                </label>
+                <button type="button" id="reader-play-all" class="reader-tool-button" onclick="playAllSentences()">▶ 連続再生</button>
+                <button type="button" id="reader-stop-audio" class="reader-tool-button" onclick="stopReaderAudio()">■ 停止</button>
             </div>
 
             <div id="chapter-navigation" class="chapter-navigation" style="display:none;">
@@ -301,7 +335,15 @@
             <form onsubmit="handleUnifiedSave(event)">
                 <div id="form-word-section">
                     <label>単語 / フレーズ</label>
-                    <input type="text" id="input-word-text" required>
+                    <input type="text" id="input-word-text" required oninput="handleWordTextInput()">
+                    <div id="input-word-annotation-field" class="language-annotation-field" style="display:none;">
+                        <label id="input-word-annotation-label" for="input-word-annotation">読み</label>
+                        <div class="annotation-input-row">
+                            <input type="text" id="input-word-annotation" autocomplete="off">
+                            <button type="button" id="input-word-annotation-auto" class="btn-sub" onclick="autoFillPrimaryAnnotation()">自動生成</button>
+                        </div>
+                        <small id="input-word-annotation-help" class="annotation-help"></small>
+                    </div>
                     <label>意味</label>
                     <input type="text" id="input-word-meaning" required>
                     <label>メモ (任意)</label>
@@ -311,11 +353,11 @@
                 </div>
 
                 <div id="form-note-section" style="display:none;">
-                    <label>対象の英文 (原文)</label>
+                    <label>対象の原文</label>
                     <textarea id="input-note-eng" rows="3" required></textarea>
-                    <label>和訳・意味</label>
+                    <label>訳・意味</label>
                     <textarea id="input-note-trans" rows="3"></textarea>
-                    <label>解説・解釈 (文法など)</label> <textarea id="input-note-extra" rows="3"></textarea>
+                    <label>解説・解釈 (文法・語法など)</label> <textarea id="input-note-extra" rows="3"></textarea>
                 </div>
 
                 <div class="modal-actions">
@@ -344,7 +386,7 @@
                 <h2>Word Statistics</h2>
                 <button type="button" class="close-btn" onclick="closeWordStatistics()">✕</button>
             </div>
-            <label class="vocabulary-check"><input type="checkbox" id="frequency-exclude-common" onchange="renderWordStatistics()"> 一般語を除外</label>
+            <label id="frequency-exclude-common-label" class="vocabulary-check"><input type="checkbox" id="frequency-exclude-common" onchange="renderWordStatistics()"> 一般語を除外</label>
             <p id="word-statistics-summary" class="word-statistics-summary"></p>
             <div id="word-statistics-list" class="word-statistics-list"></div>
         </div>
@@ -373,6 +415,7 @@
     </div>
 
     <script src="https://unpkg.com/localforage/dist/localforage.min.js"></script>
+    <script src="https://unpkg.com/pinyin-pro@3.29.4/dist/index.js"></script>
     <script src="importers.js?v=1.1"></script>
     <script src="app.js?v=4.0"></script>
     <script src="global-vocab-multiselect.js?v=1.0"></script>
