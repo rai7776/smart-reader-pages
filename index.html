@@ -57,7 +57,7 @@
                 </div>
                 <div id="global-vocab-statistics" class="vocabulary-statistics" aria-live="polite"></div>
                 <div class="vocabulary-controls">
-                    <input type="search" id="global-vocab-search" placeholder="単語・意味・メモ・出典を検索" oninput="updateGlobalVocabulary('query', this.value)">
+                    <input type="search" id="global-vocab-search" placeholder="単語・読み・意味・メモ・出典を検索" oninput="updateGlobalVocabulary('query', this.value)">
                     <label class="vocabulary-check"><input type="checkbox" id="global-vocab-exact" onchange="updateGlobalVocabulary('exact', this.checked)"> 完全一致</label>
                     <select id="global-vocab-status" onchange="updateGlobalVocabulary('status', this.value)" aria-label="暗記状態">
                         <option value="all">すべて</option>
@@ -97,6 +97,13 @@
             <div class="full-width-form">
                 <input type="text" id="text-title" placeholder="タイトルの名前">
                 <input type="url" id="text-url" placeholder="出典URL（https://...）">
+                <div class="article-language-field">
+                    <label for="article-language">学習言語</label>
+                    <select id="article-language" onchange="handleArticleLanguageChange()">
+                        <option value="en">英語</option>
+                        <option value="zh">中国語（普通話・簡体字）</option>
+                    </select>
+                </div>
                 <textarea id="text-input" placeholder="本文を入力..."></textarea>
             </div>
             <div class="input-actions">
@@ -301,7 +308,15 @@
             <form onsubmit="handleUnifiedSave(event)">
                 <div id="form-word-section">
                     <label>単語 / フレーズ</label>
-                    <input type="text" id="input-word-text" required>
+                    <input type="text" id="input-word-text" required oninput="handleWordTextInput()">
+                    <div id="input-word-annotation-field" class="language-annotation-field" style="display:none;">
+                        <label id="input-word-annotation-label" for="input-word-annotation">読み</label>
+                        <div class="annotation-input-row">
+                            <input type="text" id="input-word-annotation" autocomplete="off">
+                            <button type="button" id="input-word-annotation-auto" class="btn-sub" onclick="autoFillPrimaryAnnotation()">自動生成</button>
+                        </div>
+                        <small id="input-word-annotation-help" class="annotation-help"></small>
+                    </div>
                     <label>意味</label>
                     <input type="text" id="input-word-meaning" required>
                     <label>メモ (任意)</label>
@@ -311,11 +326,11 @@
                 </div>
 
                 <div id="form-note-section" style="display:none;">
-                    <label>対象の英文 (原文)</label>
+                    <label>対象の原文</label>
                     <textarea id="input-note-eng" rows="3" required></textarea>
-                    <label>和訳・意味</label>
+                    <label>訳・意味</label>
                     <textarea id="input-note-trans" rows="3"></textarea>
-                    <label>解説・解釈 (文法など)</label> <textarea id="input-note-extra" rows="3"></textarea>
+                    <label>解説・解釈 (文法・語法など)</label> <textarea id="input-note-extra" rows="3"></textarea>
                 </div>
 
                 <div class="modal-actions">
@@ -373,6 +388,7 @@
     </div>
 
     <script src="https://unpkg.com/localforage/dist/localforage.min.js"></script>
+    <script src="https://unpkg.com/pinyin-pro@3.29.4/dist/index.js"></script>
     <script src="importers.js?v=1.1"></script>
     <script src="app.js?v=4.0"></script>
     <script src="global-vocab-multiselect.js?v=1.0"></script>
