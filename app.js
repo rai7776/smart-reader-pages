@@ -55,6 +55,268 @@ const SAMPLE_DATA = [
 const db = localforage.createInstance({ name: "ProjectA_DB_v3" });
 const DEFAULT_READER_SETTINGS = Object.freeze({ fontSize: 18, lineHeight: 1.8 });
 
+const LANGUAGE_PROFILES = Object.freeze({
+    en: {
+        id: 'en',
+        label: '英語',
+        locale: 'en-US',
+        wordUnit: 'words',
+        annotations: []
+    },
+    zh: {
+        id: 'zh',
+        label: '中国語（普通話）',
+        locale: 'zh-CN',
+        wordUnit: '語',
+        annotations: [
+            {
+                id: 'pinyin',
+                label: '拼音',
+                category: 'reading',
+                system: 'pinyin',
+                display: 'ruby',
+                learnable: true
+            }
+        ]
+    }
+});
+
+function getArticleLanguage(article = currentArticle) {
+    const language = String(article?.language || 'en');
+    return LANGUAGE_PROFILES[language] ? language : 'en';
+}
+
+function getLanguageProfile(article = currentArticle) {
+    return LANGUAGE_PROFILES[getArticleLanguage(article)] || LANGUAGE_PROFILES.en;
+}
+
+function getPrimaryAnnotationDefinition(article = currentArticle) {
+    return getLanguageProfile(article).annotations.find(annotation => annotation.learnable) || null;
+}
+
+function getWordAnnotation(word, annotationId) {
+    if (!word || !Array.isArray(word.annotations)) return null;
+    return word.annotations.find(annotation => annotation && annotation.id === annotationId) || null;
+}
+
+function getWordAnnotationValue(word, annotationId) {
+    return String(getWordAnnotation(word, annotationId)?.value || '');
+}
+
+function setWordAnnotationValue(word, definition, value) {
+    if (!word || !definition) return;
+    const nextValue = String(value || '').trim();
+    const annotations = Array.isArray(word.annotations) ? [...word.annotations] : [];
+    const index = annotations.findIndex(annotation => annotation && annotation.id === definition.id);
+    if (!nextValue) {
+        if (index >= 0) annotations.splice(index, 1);
+    } else {
+        const next = {
+            id: definition.id,
+            category: definition.category,
+            system: definition.system,
+            display: definition.display,
+            learnable: definition.learnable !== false,
+            value: nextValue
+        };
+        if (index >= 0) annotations[index] = { ...annotations[index], ...next };
+        else annotations.push(next);
+    }
+    word.annotations = annotations;
+}
+
+function normalizeWordLearningState(word, article = currentArticle) {
+    if (!word) return null;
+    const hadStudy = !!(word.study && typeof word.study === 'object' && !Array.isArray(word.study));
+    const legacyMemorized = !!word.memorized;
+    if (!hadStudy) {
+        word.study = { meaning: legacyMemorized, annotations: {} };
+    }
+    if (typeof word.study.meaning !== 'boolean') word.study.meaning = legacyMemorized;
+    if (!word.study.annotations || typeof word.study.annotations !== 'object' || Array.isArray(word.study.annotations)) {
+        word.study.annotations = {};
+    }
+
+    const profile = getLanguageProfile(article);
+    profile.annotations.filter(annotation => annotation.learnable).forEach(annotation => {
+        if (typeof word.study.annotations[annotation.id] !== 'boolean') {
+            const hasValue = !!getWordAnnotationValue(word, annotation.id).trim();
+            word.study.annotations[annotation.id] = hadStudy ? false : (legacyMemorized && hasValue);
+        }
+    });
+
+    const targets = [!!word.study.meaning];
+    profile.annotations
+        .filter(annotation => annotation.learnable && getWordAnnotationValue(word, annotation.id).trim())
+        .forEach(annotation => targets.push(!!word.study.annotations[annotation.id]));
+    word.memorized = targets.length > 0 && targets.every(Boolean);
+    return word.study;
+}
+
+function getWordStudyTargets(word, article = currentArticle) {
+    const study = normalizeWordLearningState(word, article);
+    if (!study) return [];
+    const targets = [{ id: 'meaning', label: '意味', learned: !!study.meaning }];
+    getLanguageProfile(article).annotations
+        .filter(annotation => annotation.learnable && getWordAnnotationValue(word, annotation.id).trim())
+        .forEach(annotation => targets.unshift({
+            id: 'annotation:' + annotation.id,
+            label: annotation.label,
+            learned: !!study.annotations[annotation.id]
+        }));
+    return targets;
+}
+
+function setWordStudyTarget(word, targetId, learned, article = currentArticle) {
+    const study = normalizeWordLearningState(word, article);
+    if (!study) return;
+    if (targetId === 'meaning') {
+        study.meaning = !!learned;
+    } else if (String(targetId).startsWith('annotation:')) {
+        const annotationId = String(targetId).slice('annotation:'.length);
+        study.annotations[annotationId] = !!learned;
+    }
+    normalizeWordLearningState(word, article);
+}
+
+function setAllWordStudyTargets(word, learned, article = currentArticle) {
+    const study = normalizeWordLearningState(word, article);
+    if (!study) return;
+    study.meaning = !!learned;
+    getLanguageProfile(article).annotations
+        .filter(annotation => annotation.learnable && getWordAnnotationValue(word, annotation.id).trim())
+        .forEach(annotation => { study.annotations[annotation.id] = !!learned; });
+    normalizeWordLearningState(word, article);
+}
+
+function getLanguageTokens(text, article = currentArticle) {
+    const value = String(text ?? '');
+    const profile = getLanguageProfile(article);
+    if (typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function') {
+        try {
+            const segmenter = new Intl.Segmenter(profile.locale, { granularity: 'word' });
+            return Array.from(segmenter.segment(value))
+                .filter(segment => segment.isWordLike)
+                .map(segment => segment.segment);
+        } catch (error) {
+            console.warn('Intl.Segmenter fallback:', error);
+        }
+    }
+    if (profile.id === 'zh') return value.match(/[\p{Script=Han}]/gu) || [];
+    return value.match(/[A-Za-z]+(?:['’][A-Za-z]+)*(?:-[A-Za-z]+(?:['’][A-Za-z]+)*)*/g) || [];
+}
+
+function countLanguageWords(text, article = currentArticle) {
+    return getLanguageTokens(text, article).length;
+}
+
+function getModalWordArticle() {
+    if (globalVocabularyEditRef) {
+        return libraryItems.find(item => item?.type === 'article' && globalIdsEqual(item.id, globalVocabularyEditRef.articleId)) || currentArticle;
+    }
+    return currentArticle;
+}
+
+function generatePrimaryAnnotationValue(text, article = getModalWordArticle()) {
+    const definition = getPrimaryAnnotationDefinition(article);
+    if (!definition || !String(text || '').trim()) return '';
+    if (definition.system === 'pinyin' && window.pinyinPro && typeof window.pinyinPro.pinyin === 'function') {
+        try {
+            return String(window.pinyinPro.pinyin(String(text).trim(), { toneType: 'symbol', type: 'string' }) || '').trim();
+        } catch (error) {
+            console.warn('Pinyin generation failed:', error);
+        }
+    }
+    return '';
+}
+
+let lastAutoAnnotationValue = '';
+
+function syncWordAnnotationField(article = getModalWordArticle()) {
+    const field = document.getElementById('input-word-annotation-field');
+    const label = document.getElementById('input-word-annotation-label');
+    const input = document.getElementById('input-word-annotation');
+    const help = document.getElementById('input-word-annotation-help');
+    const auto = document.getElementById('input-word-annotation-auto');
+    if (!field || !label || !input) return;
+    const definition = getPrimaryAnnotationDefinition(article);
+    field.style.display = definition ? '' : 'none';
+    if (!definition) {
+        input.value = '';
+        lastAutoAnnotationValue = '';
+        return;
+    }
+    label.textContent = definition.label;
+    input.placeholder = definition.system === 'pinyin' ? '例: xuéxí' : definition.label;
+    if (help) help.textContent = definition.system === 'pinyin'
+        ? '声調記号付きで保存します。自動生成後も手動で修正できます。'
+        : '';
+    if (auto) auto.style.display = definition.system === 'pinyin' ? '' : 'none';
+}
+
+function autoFillPrimaryAnnotation() {
+    const input = document.getElementById('input-word-annotation');
+    const wordInput = document.getElementById('input-word-text');
+    if (!input || !wordInput) return;
+    const generated = generatePrimaryAnnotationValue(wordInput.value);
+    if (!generated) return;
+    input.value = generated;
+    lastAutoAnnotationValue = generated;
+}
+
+function handleWordTextInput() {
+    const input = document.getElementById('input-word-annotation');
+    if (!input || input.closest('#input-word-annotation-field')?.style.display === 'none') return;
+    if (input.value && input.value !== lastAutoAnnotationValue) return;
+    const generated = generatePrimaryAnnotationValue(document.getElementById('input-word-text')?.value || '');
+    input.value = generated;
+    lastAutoAnnotationValue = generated;
+}
+
+function handleArticleLanguageChange() {
+    const language = document.getElementById('article-language')?.value || 'en';
+    const draftArticle = { language };
+    const definition = getPrimaryAnnotationDefinition(draftArticle);
+    const help = document.getElementById('file-import-message');
+    if (help && definition) {
+        help.textContent = '中国語では単語登録時に拼音を自動生成できます。';
+    } else if (help && !pendingImportedDocument) {
+        help.textContent = '';
+    }
+}
+
+function syncAnkiTargetOptions(article = currentArticle) {
+    const select = document.getElementById('anki-target-select');
+    if (!select) return;
+    const definition = getPrimaryAnnotationDefinition(article);
+    const desired = definition
+        ? [
+            ['learning', definition.label + 'と意味を隠す'],
+            ['reading', definition.label + 'を隠す'],
+            ['meaning', '意味を隠す'],
+            ['word', '単語を隠す']
+        ]
+        : [
+            ['both', '両方隠す'],
+            ['word', '単語を隠す'],
+            ['meaning', '意味を隠す']
+        ];
+    const signature = desired.map(item => item.join(':')).join('|');
+    if (select.dataset.languageSignature !== signature) {
+        const previous = select.value;
+        select.innerHTML = '';
+        desired.forEach(([value, label]) => {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = label;
+            select.appendChild(option);
+        });
+        const values = desired.map(item => item[0]);
+        select.value = values.includes(previous) ? previous : desired[0][0];
+        select.dataset.languageSignature = signature;
+    }
+}
+
 let libraryItems = [], currentFolderId = null, currentArticle = null;
 let currentChapterId = null;
 let readerWordCounts = { articleId: null, chapterId: null, chapter: 0, book: 0, chapterChars: 0, bookChars: 0 };
