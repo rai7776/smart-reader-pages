@@ -462,17 +462,59 @@ function renderReaderSentenceHtml(sentence, chapterId) {
     return html;
 }
 
+/**
+ * Resolve pinyin from the actual article text, not from a vocabulary card's
+ * annotation. Character offsets are measured in Unicode code points so that
+ * highlights and emoji do not shift the reading assigned to a Han character.
+ */
 function generatePinyinArray(text) {
-    if (!window.pinyinPro || typeof window.pinyinPro.pinyin !== 'function') return [];
-    try {
-        const chars = Array.from(text);
-        const readings = window.pinyinPro.pinyin(text, { toneType: 'symbol', type: 'array' });
-        if (Array.isArray(readings) && readings.length === chars.length) return readings;
-        return chars.map(char => window.pinyinPro.pinyin(char, { toneType: 'symbol', type: 'string' }));
-    } catch (error) {
-        console.warn('Pinyin rendering failed:', error);
-        return [];
+    const chars = Array.from(String(text ?? ''));
+    const readings = Array(chars.length).fill('');
+    if (!window.pinyinPro || typeof window.pinyinPro.pinyin !== 'function') return readings;
+
+    const isHan = char => /\p{Script=Han}/u.test(char);
+    let cursor = 0;
+    while (cursor < chars.length) {
+        if (!isHan(chars[cursor])) {
+            cursor += 1;
+            continue;
+        }
+
+        const start = cursor;
+        while (cursor < chars.length && isHan(chars[cursor])) cursor += 1;
+        const run = chars.slice(start, cursor);
+
+        // Run the conversion on the contiguous phrase first. Converting each
+        // DOM text node separately loses context at word/highlight boundaries.
+        try {
+            const result = window.pinyinPro.pinyin(run.join(''), {
+                toneType: 'symbol',
+                type: 'array'
+            });
+            if (Array.isArray(result) && result.length === run.length) {
+                result.forEach((reading, index) => {
+                    readings[start + index] = String(reading || '');
+                });
+                continue;
+            }
+        } catch (error) {
+            console.warn('Contextual pinyin generation failed:', error);
+        }
+
+        // Only fall back to single characters if the library cannot align a
+        // whole phrase. Do not replace article readings with word-card pinyin.
+        run.forEach((char, index) => {
+            try {
+                readings[start + index] = String(window.pinyinPro.pinyin(char, {
+                    toneType: 'symbol',
+                    type: 'string'
+                }) || '');
+            } catch (error) {
+                console.warn('Pinyin character fallback failed:', error);
+            }
+        });
     }
+    return readings;
 }
 
 function applyReaderAnnotations() {
@@ -487,31 +529,45 @@ function applyReaderAnnotations() {
         const walker = document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT);
         const nodes = [];
         let node;
-        while ((node = walker.nextNode())) nodes.push(node);
+        while ((node = walker.nextNode())) {
+            if (node.parentElement?.closest('.sentence-audio-btn, .reader-ruby')) continue;
+            nodes.push(node);
+        }
+
+        // Collect the original paragraph across all highlight/formatting spans
+        // before converting it. Its pinyin must not depend on DOM node splits.
+        const paragraphText = nodes.map(textNode => textNode.nodeValue || '').join('');
+        if (!/[\p{Script=Han}]/u.test(paragraphText)) return;
+        const readings = generatePinyinArray(paragraphText);
+        let paragraphOffset = 0;
+
         nodes.forEach(textNode => {
-            if (textNode.parentElement?.closest('.sentence-audio-btn')) return;
-            const text = textNode.nodeValue || '';
-            if (!/[\p{Script=Han}]/u.test(text)) return;
+            const chars = Array.from(textNode.nodeValue || '');
+            const offset = paragraphOffset;
+            paragraphOffset += chars.length;
+            if (!chars.some(char => /\p{Script=Han}/u.test(char))) return;
 
             const fragment = document.createDocumentFragment();
-            let cursor = 0;
-            const pattern = /[\p{Script=Han}]+/gu;
-            let match;
-            while ((match = pattern.exec(text)) !== null) {
-                if (match.index > cursor) fragment.appendChild(document.createTextNode(text.slice(cursor, match.index)));
-                const run = match[0];
-                const chars = Array.from(run);
-                const readings = generatePinyinArray(run);
-                chars.forEach((char, index) => {
-                    const ruby = document.createElement('span');
-                    ruby.className = 'reader-ruby';
-                    ruby.dataset.annotation = String(readings[index] || '');
-                    ruby.textContent = char;
-                    fragment.appendChild(ruby);
-                });
-                cursor = match.index + run.length;
-            }
-            if (cursor < text.length) fragment.appendChild(document.createTextNode(text.slice(cursor)));
+            let plainText = '';
+            const flushPlainText = () => {
+                if (!plainText) return;
+                fragment.appendChild(document.createTextNode(plainText));
+                plainText = '';
+            };
+
+            chars.forEach((char, index) => {
+                if (!/[\p{Script=Han}]/u.test(char)) {
+                    plainText += char;
+                    return;
+                }
+                flushPlainText();
+                const ruby = document.createElement('span');
+                ruby.className = 'reader-ruby';
+                ruby.dataset.annotation = readings[offset + index] || '';
+                ruby.textContent = char;
+                fragment.appendChild(ruby);
+            });
+            flushPlainText();
             textNode.replaceWith(fragment);
         });
     });
