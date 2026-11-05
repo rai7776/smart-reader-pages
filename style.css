@@ -1243,6 +1243,8 @@ input, textarea, select { font-size: 16px !important; }
 .reader-tool-rate {
     display: inline-flex;
     align-items: center;
+    flex-shrink: 0;
+    white-space: nowrap;
     gap: 5px;
     color: #555;
 }
@@ -1256,6 +1258,8 @@ input, textarea, select { font-size: 16px !important; }
     background: white;
 }
 .reader-tool-button {
+    flex-shrink: 0;
+    white-space: nowrap;
     padding: 5px 9px;
     border: 1px solid #ddd;
     border-radius: 6px;
