@@ -221,6 +221,10 @@
                     <input type="checkbox" id="reader-annotation-toggle" onchange="toggleReaderAnnotation()">
                     <span id="reader-annotation-toggle-text">読み表示</span>
                 </label>
+                <label class="reader-tool-toggle">
+                    <input type="checkbox" id="reader-sentence-audio-toggle" onchange="toggleReaderSentenceAudio()">
+                    <span>文ごとの再生ボタン</span>
+                </label>
                 <label class="reader-tool-rate">
                     <span>音声</span>
                     <select id="reader-speech-rate" onchange="updateSpeechRate(this.value)" aria-label="読み上げ速度">
