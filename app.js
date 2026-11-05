@@ -53,7 +53,7 @@ const SAMPLE_DATA = [
 
 
 const db = localforage.createInstance({ name: "ProjectA_DB_v3" });
-const DEFAULT_READER_SETTINGS = Object.freeze({ fontSize: 18, lineHeight: 1.8, speechRate: 0.85, annotationVisibility: {} });
+const DEFAULT_READER_SETTINGS = Object.freeze({ fontSize: 18, lineHeight: 1.8, speechRate: 0.85, showSentenceAudioButtons: false, annotationVisibility: {} });
 
 const LANGUAGE_PROFILES = Object.freeze({
     en: {
@@ -397,10 +397,12 @@ function syncReaderLanguageTools(article = currentArticle) {
     const label = document.getElementById('reader-annotation-toggle-label');
     const text = document.getElementById('reader-annotation-toggle-text');
     const input = document.getElementById('reader-annotation-toggle');
+    const sentenceAudioToggle = document.getElementById('reader-sentence-audio-toggle');
     const rate = document.getElementById('reader-speech-rate');
     if (label) label.style.display = definition ? '' : 'none';
     if (text && definition) text.textContent = definition.label + '表示';
     if (input) input.checked = definition ? isReaderAnnotationVisible(article) : false;
+    if (sentenceAudioToggle) sentenceAudioToggle.checked = !!readerSettings.showSentenceAudioButtons;
     if (rate) rate.value = String(readerSettings.speechRate || DEFAULT_READER_SETTINGS.speechRate);
 }
 
@@ -416,6 +418,18 @@ async function toggleReaderAnnotation() {
     renderArticleText();
     reapplyReaderSearchForCurrentContent();
     restoreReadingPosition(position);
+}
+
+function syncReaderSentenceAudioVisibility() {
+    const display = document.getElementById('text-display');
+    if (display) display.classList.toggle('show-sentence-audio', !!readerSettings.showSentenceAudioButtons);
+}
+
+async function toggleReaderSentenceAudio() {
+    const input = document.getElementById('reader-sentence-audio-toggle');
+    readerSettings.showSentenceAudioButtons = !!input?.checked;
+    syncReaderSentenceAudioVisibility();
+    await db.setItem('reader_settings', readerSettings);
 }
 
 async function updateSpeechRate(value) {
@@ -2271,6 +2285,7 @@ function renderArticleText({ skipAnnotations = false } = {}) {
     ensureArticleCollections(currentArticle);
     syncReaderLanguageTools(currentArticle);
     const display = document.getElementById('text-display');
+    syncReaderSentenceAudioVisibility();
     const content = getCurrentChapterContent();
     const chapterId = getCurrentChapterId();
     const paragraphs = getReaderParagraphs(content);
