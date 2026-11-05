@@ -17,6 +17,14 @@ test('sentence audio buttons are opt-in and do not reserve space when disabled',
     assert.match(html, /id="reader-sentence-audio-toggle"\s+onchange="toggleReaderSentenceAudio\(\)"/);
 });
 
+test('compact labels and grouped controls fit narrow screens without splitting items', () => {
+    assert.match(html, /<span>🔊表示<\/span>/);
+    assert.match(html, /aria-label="各文の再生ボタンを表示"/);
+    assert.match(html, /<div class="reader-audio-actions">\s*<button[^>]*id="reader-play-all"[\s\S]*?<button[^>]*id="reader-stop-audio"/);
+    assert.match(css, /\.reader-audio-actions\s*\{[^}]*display:\s*inline-flex;[^}]*flex-shrink:\s*0;/);
+    assert.match(css, /\.reader-tool-toggle,\s*\.reader-tool-rate\s*\{[^}]*white-space:\s*nowrap;/);
+});
+
 test('visibility toggle updates the reader immediately and persists across reloads', async () => {
     const start = app.indexOf('function syncReaderSentenceAudioVisibility() {');
     const end = app.indexOf('async function updateSpeechRate(value) {', start);
