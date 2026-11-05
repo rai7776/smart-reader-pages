@@ -1275,7 +1275,7 @@ input, textarea, select { font-size: 16px !important; }
     background: rgba(116, 161, 173, 0.16);
 }
 .sentence-audio-btn {
-    display: inline-flex;
+    display: none;
     align-items: center;
     justify-content: center;
     width: 1.35em;
@@ -1288,21 +1288,24 @@ input, textarea, select { font-size: 16px !important; }
     background: transparent;
     color: #77838a;
     cursor: pointer;
-    opacity: 0;
+    opacity: 0.72;
     transition: opacity 0.12s ease, background-color 0.12s ease;
+}
+#text-display.show-sentence-audio .sentence-audio-btn {
+    display: inline-flex;
 }
 .sentence-audio-btn::before {
     content: "🔊";
     font-size: 0.72em;
 }
-.reader-sentence:hover > .sentence-audio-btn,
 .sentence-audio-btn:focus-visible,
 .reader-sentence.is-speaking > .sentence-audio-btn {
-    opacity: 0.7;
+    opacity: 1;
 }
-.sentence-audio-btn:hover {
+.sentence-audio-btn:hover,
+.sentence-audio-btn:focus-visible {
     background: rgba(116, 161, 173, 0.12);
-    opacity: 1 !important;
+    opacity: 1;
 }
 
 /*
@@ -1330,12 +1333,6 @@ input, textarea, select { font-size: 16px !important; }
     line-height: 1;
     pointer-events: none;
     user-select: none;
-}
-
-@media (hover: none) {
-    .sentence-audio-btn {
-        opacity: 0.5;
-    }
 }
 
 @media (max-width: 640px) {
