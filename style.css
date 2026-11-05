@@ -1257,6 +1257,13 @@ input, textarea, select { font-size: 16px !important; }
     border-radius: 6px;
     background: white;
 }
+.reader-audio-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    flex-shrink: 0;
+    white-space: nowrap;
+}
 .reader-tool-button {
     flex-shrink: 0;
     white-space: nowrap;
