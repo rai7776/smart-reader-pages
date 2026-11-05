@@ -234,8 +234,10 @@
                         <option value="1.2">1.2×</option>
                     </select>
                 </label>
-                <button type="button" id="reader-play-all" class="reader-tool-button" onclick="playAllSentences()">▶ 連続再生</button>
-                <button type="button" id="reader-stop-audio" class="reader-tool-button" onclick="stopReaderAudio()">■ 停止</button>
+                <div class="reader-audio-actions">
+                    <button type="button" id="reader-play-all" class="reader-tool-button" onclick="playAllSentences()">▶ 連続再生</button>
+                    <button type="button" id="reader-stop-audio" class="reader-tool-button" onclick="stopReaderAudio()">■ 停止</button>
+                </div>
             </div>
 
             <div id="chapter-navigation" class="chapter-navigation" style="display:none;">
